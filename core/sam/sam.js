@@ -128,6 +128,11 @@ export class SamCoupe {
         this.rom = new Uint8Array(0x8000);
         this.fb = new Uint32Array(FB_W * FB_H);
         this.clut = new Uint8Array(16);
+        // The CLUT and HMPR's mode 3 colours as each screen line began: a
+        // program that changes the palette on line interrupts has a screen
+        // only these colour as it was seen (the debugger's screen viewer)
+        this.lineClut = Array.from({ length: 192 }, () => new Uint8Array(16));
+        this.lineMd3 = new Uint8Array(192);
         this.keys = new Uint8Array(9).fill(0xFF);
         this.saa = new SAA1099();
         this.secBuf = [this.rom, this.ram, this.ram, this.ram];
@@ -559,6 +564,7 @@ export class SamCoupe {
         let p = y * FB_W + cx * 16;
         const sy = y - BORDER_Y, sx = cx - BORDER_X / 8;
         const mode = this._mode();
+        if (sx === 0 && sy >= 0 && sy < 192) { this.lineClut[sy].set(clut); this.lineMd3[sy] = (this.hmpr >> 3) & 0x0C; }
         if (sy < 0 || sy >= 192 || sx < 0 || sx >= 32 || (mode >= 2 && (this.border & 0x80))) {
             const c = PALETTE[clut[(this.border & 7) | ((this.border >> 2) & 8)]];
             for (let i = 0; i < 16; i++) fb[p++] = c;

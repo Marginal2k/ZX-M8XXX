@@ -15,6 +15,10 @@
  *
  * Modes 3 and 4 take 24K, so two pages: the even one the VMPR names, and the
  * next. The output is always 512 x 192 (modes 1, 2, 4 have each pixel twice).
+ *
+ * The colours: one CLUT for the whole screen, or one a line (lineClut and
+ * lineMd3, as the machine records them while the beam draws) for a program
+ * that changes the palette on line interrupts.
  */
 
 import { PALETTE } from './sam.js';
@@ -49,12 +53,16 @@ export function screenByteAt(mode, x, y) {
  * @param {Uint8Array} clut  16 entries of the 128 colours
  * @param {number} md3       HMPR bits 5-6 as a CLUT offset for mode 3 (0, 4, 8, 12)
  * @param {boolean} flash    the flash phase for modes 1-2
+ * @param {Uint8Array[]} [lineClut]  a CLUT for each line, in place of clut
+ * @param {Uint8Array} [lineMd3]     and HMPR's mode 3 colours for each
  */
-export function renderScreen(ram, page, mode, clut, md3, flash, out) {
+export function renderScreen(ram, page, mode, clut, md3, flash, out, lineClut = null, lineMd3 = null) {
     const base = screenBase(page, mode), mask = ram.length - 1;
-    const col = (i) => PALETTE[clut[i & 15]];
+    let lc = clut;
+    const col = (i) => PALETTE[lc[i & 15]];
     let p = 0;
     for (let y = 0; y < SCR_H; y++) {
+        if (lineClut) { lc = lineClut[y]; if (lineMd3) md3 = lineMd3[y]; }
         if (mode <= 2) {
             for (let cx = 0; cx < 32; cx++) {
                 const at = screenByteAt(mode, cx << 4, y);

@@ -30,7 +30,7 @@
         import { isSamRelease } from '../ui/sam-player.js';
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
         import { renderScreen, screenByteAt, screenBase } from '../core/sam/sam-screen.js';
-        import { FB_W, BORDER_X, BORDER_Y } from '../core/sam/sam.js';
+        import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -274,6 +274,25 @@
                 }
                 assert(bad === 0, `mode ${mode}: the viewer draws what the machine draws`, `${bad} pixels differ`);
             }
+        }
+
+        {
+            // a palette changed half way down (a line interrupt's work): the
+            // viewer with the machine's line CLUTs draws what the beam drew
+            const m = new SamCoupe();
+            for (let i = 0; i < 0x6000; i++) m.ram[(6 << 14) + i] = (i * 13) & 0xFF;
+            for (let i = 0; i < 16; i++) m.clut[i] = i;
+            m.vmpr = 6 | 0x60;
+            m.rpos = 0;
+            m.renderTo(SCREEN_T + (TOP + 100) * T_LINE);            // lines 0-99 drawn
+            for (let i = 0; i < 16; i++) m.clut[i] = 0x70 - i;       // then the palette changes
+            m.renderTo(1e9);
+            const out = new Uint32Array(512 * 192);
+            const diff = (o) => { let bad = 0; for (let y = 0; y < 192; y++) for (let x = 0; x < 512; x++) if (o[y * 512 + x] !== m.fb[(BORDER_Y + y) * FB_W + BORDER_X * 2 + x]) bad++; return bad; };
+            renderScreen(m.ram, 6, 4, m.clut, 0, false, out, m.lineClut, m.lineMd3);
+            assert(diff(out) === 0, 'palette changed at line 100: the line CLUTs draw what the machine drew', `${diff(out)} pixels differ`);
+            renderScreen(m.ram, 6, 4, m.clut, 0, false, out);
+            assert(diff(out) > 0, 'and one CLUT for the whole screen does not');
         }
 
         // ---------------------------------------------------------------

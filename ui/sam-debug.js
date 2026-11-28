@@ -45,6 +45,8 @@ const CSS = `
 .samdbg .status-line { color: #f0c060; font-size: 11px; min-height: 1.3em; padding: 2px 4px; }
 .samdbg .memory-byte.mark { background: #f0c060; color: #111; }
 .samdbg .panel-tab-content { padding: 6px; }
+.samdbg .follow-label { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.samdbg .follow-label input[type=checkbox] { width: auto; min-width: 0; margin: 0; padding: 0; height: auto; }
 .samdbg .memory-header select, .samdbg .memory-header input { font-size: 11px; }
 `;
 
@@ -79,7 +81,7 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
         <div class="memory-controls">
           <input type="text" class="dgo" placeholder="addr / name" maxlength="24" title="An address (hex) or a name; Enter to go">
           <button data-a="pcgo" title="Go to PC">PC</button>
-          <label style="font-size:11px" title="Keep the PC in view"><input type="checkbox" class="follow" checked> Follow PC</label>
+          <label class="follow-label" title="Keep the PC in view, while it runs too"><input type="checkbox" class="follow" checked> Follow PC</label>
         </div>
       </div>
       <div class="disassembly-view dis"></div>
@@ -454,7 +456,12 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
     function renderScreenBox() {
         if (!scr.offsetParent) return;          // its tab is not open
         const { page, mode } = shown();
-        renderScreen(m.ram, page, mode, m.clut, (m.hmpr >> 3) & 0x0C, !!(m.frames & 16), sbuf);
+        // the screen being shown, as the beam coloured it line by line (the
+        // palette a program changes on line interrupts); any other page with
+        // the CLUT as it is now
+        const live = page === (m.vmpr & 0x1F) && mode === ((m.vmpr >> 5) & 3) + 1;
+        renderScreen(m.ram, page, mode, m.clut, (m.hmpr >> 3) & 0x0C, !!(m.frames & 16), sbuf,
+                     live ? m.lineClut : null, live ? m.lineMd3 : null);
         sctx.putImageData(simg, 0, 0);
     }
     const pixelAt = (e) => {
@@ -587,8 +594,18 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
         renderHistory(); renderLabels(); renderBps(); renderScreenBox();
     }
 
+    // While it runs: what changes every frame, a few times a second (as the
+    // main debugger does), while the panel is open and the page is shown
+    const live = setInterval(() => {
+        if (app.isPaused() || !root.offsetParent || document.hidden) return;
+        renderRegs(); renderPaging(); if ($('.follow').checked) renderCode();
+        renderStack(); renderCalls(); renderMem(); renderScreenBox();
+        if (root.querySelector('.panel-tab-content.active')?.dataset.panel === 'hist') renderHistory();
+    }, 160);
+
     renderAll();
     return {
+        destroy() { clearInterval(live); },
         onBreak(hit) { after(hit); },
         refresh: renderAll,
         say,
