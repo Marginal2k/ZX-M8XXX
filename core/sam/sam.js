@@ -26,8 +26,9 @@
  * start of the right border of the line above it.
  *   sound   SAA1099 (255: A8 = 1 address, A8 = 0 data), beeper (254 bit 4)
  *
- *   disks   a WD1772 for each drive: drive 1 at 224-231, drive 2 at 240-247
- *           (A0-A1 the register, A2 the side); the +D's controller
+ *   disks   a VL1772 for each drive: drive 1 at 224-231, drive 2 at 240-247
+ *           (A0-A1 the register, A2 the side), ported from SimCoupe
+ *           (core/sam/vl1772.js), reading disks as lists of sectors
  *   waits   memory contention and the ASIC port waits as SimCoupe has them:
  *           an access to RAM waits for the next free slot, every 8 T-states
  *           while the screen is fetched (and in mode 1 in a band of each
@@ -47,7 +48,7 @@
 
 import { Z80 } from '../z80.js';
 import { SAA1099, SAA_CLOCK } from '../saa1099.js';
-import { PlusDDisk } from '../loaders/disk-mgt.js';
+import { VL1772 } from './vl1772.js';
 import { hasDos, makeFileDisk } from './sam-disk.js';
 
 export const CPU_CLOCK = 6000000;
@@ -130,10 +131,10 @@ export class SamCoupe {
         this.cpu.portRead = (port) => this.portIn(port);
         this.cpu.portWrite = (port, val) => this.portOut(port, val);
         this.mouse = { dx: 0, dy: 0, buttons: 0, pos: 0, last: 0, buf: new Uint8Array(9) };
-        this.disks = [new PlusDDisk(), new PlusDDisk()];
         // The disks turn in real time: 300 rpm, ten frames a revolution
         this.frameBase = 0;
-        for (const d of this.disks) d.setRotationClock(() => this.frameBase + this.cpu.tStates, () => 10 * T_FRAME);
+        const now = () => this.frameBase + this.cpu.tStates;
+        this.drives = [new VL1772(now, 10 * T_FRAME), new VL1772(now, 10 * T_FRAME)];
         this.contention = true;
         this._hookWaits();
         this.sampleRate = 44100;
@@ -155,7 +156,7 @@ export class SamCoupe {
         this.clut.fill(0);
         this.beeper = 0;
         this.saa.reset();
-        for (const d of this.disks) d.reset();
+        for (const d of this.drives) d.reset();
         this.cpu.reset();
         this.cpu.tStates = 0;
         this.rpos = 0;
@@ -263,8 +264,7 @@ export class SamCoupe {
     portIn(port) {
         const lo = port & 0xFF, hi = port >> 8, t = this.cpu.tStates;
         if ((lo & 0xF8) === 0xE0 || (lo & 0xF8) === 0xF0) {
-            const d = this.disks[(lo >> 4) & 1];
-            if (!(lo & 0x08)) { d.side = (lo >> 2) & 1; return d.readRegister(lo & 3); }
+            if (!(lo & 0x08)) return this.drives[(lo >> 4) & 1].read(lo & 3);
         }
         switch (lo) {
             case 0xFE: {
@@ -293,11 +293,10 @@ export class SamCoupe {
     portOut(port, val) {
         const lo = port & 0xFF, t = this.cpu.tStates;
         if ((lo & 0xF8) === 0xE0 || (lo & 0xF8) === 0xF0) {
-            const d = this.disks[(lo >> 4) & 1];
+            const d = this.drives[(lo >> 4) & 1];
             if (!(lo & 0x08)) {
-                d.side = (lo >> 2) & 1;
-                if ((lo & 3) === 0 && d === this.disks[0]) this._dosBoot(d, val);
-                d.writeRegister(lo & 3, val);
+                if ((lo & 3) === 0 && d === this.drives[0]) this._dosBoot(d, val, (lo >> 2) & 1);
+                d.write(lo & 3, val, (lo >> 2) & 1);
                 return;
             }
         }
@@ -340,6 +339,7 @@ export class SamCoupe {
         this._audioFrame();
         cpu.tStates -= T_FRAME;
         this.frameBase += T_FRAME;
+        for (const d of this.drives) d.frameEnd();
         this.rpos = 0;
         this.frames++;
     }
@@ -451,22 +451,22 @@ export class SamCoupe {
     // Called on every command to drive 1: the ROM's read of track 4 sector 1
     // (BOOT) from a disk with no DOS reads SAMDOS instead, up to its last
     // sector. Only the ROM's: a program's own file may start there too.
-    _dosBoot(d, cmd) {
-        const drv = d.drives[0], sw = this._dosSwap, isRead = (cmd & 0xE0) === 0x80;
+    _dosBoot(d, cmd, side) {
+        const sw = this._dosSwap, isRead = (cmd & 0xE0) === 0x80;
         if (sw && sw.done) this._restoreDos();
-        if (!this._dosSwap && this.dos && isRead && drv.diskData && d.side === 0 &&
+        if (!this._dosSwap && this.dos && isRead && d.disk && side === 0 &&
             this.secBuf[this.cpu.pc >> 14] === this.rom &&
-            d.track === 4 && d.sector === 1 && !hasDos(drv.diskData)) {
-            this._dosSwap = { orig: drv.diskData, done: false };
-            drv.diskData = this.dos.disk;
+            d.cyl === 4 && d.regSector === 1 && !hasDos(d.disk)) {
+            this._dosSwap = { orig: d.disk, done: false };
+            d.disk = this.dos.disk;
         }
         const s = this._dosSwap;
-        if (s && isRead && d.track === this.dos.last.track && d.sector === this.dos.last.sector) s.done = true;
+        if (s && isRead && d.cyl === this.dos.last.track && d.regSector === this.dos.last.sector) s.done = true;
     }
 
     _restoreDos() {
         if (!this._dosSwap) return;
-        this.disks[0].drives[0].diskData = this._dosSwap.orig;
+        this.drives[0].disk = this._dosSwap.orig;
         this._dosSwap = null;
     }
 

@@ -2,7 +2,7 @@
 // keyboard and the sound, run 50 frames a second.
 
 import { SamCoupe, FB_W, FB_H } from '../core/sam/sam.js';
-import { toMgt, isSamDiskName } from '../core/sam/sam-disk.js';
+import { loadSamDisk, isSamDiskName } from '../core/sam/sam-disk.js';
 import { ZipLoader } from '../core/loaders/zip.js';
 
 // PC key (KeyboardEvent.code) -> SAM key
@@ -150,7 +150,7 @@ export async function createSamApp(o) {
                 if (!files.length) throw new Error('no SAM disk in the ZIP');
                 data = new Uint8Array(files[0].data); name = files[0].name;
             }
-            m.disks[drive].loadDisk(toMgt(data), 'mgt', 0);
+            m.drives[drive].insert(loadSamDisk(data));
             names[drive] = name;
             say(`drive ${drive + 1}: ${name}`);
             if (andBoot) boot();
@@ -172,11 +172,12 @@ export async function createSamApp(o) {
         });
     }
     o.save?.addEventListener('click', () => {
-        const d = m.disks[0].drives[0].diskData;
-        if (!d) { say('drive 1 is empty'); return; }
+        const disk = m.drives[0].disk;
+        if (!disk) { say('drive 1 is empty'); return; }
+        const { data: d, ext } = disk.toFile();   // MGT, or EDSK for a disk in its own format
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([d], { type: 'application/octet-stream' }));
-        a.download = (names[0] || 'disk').replace(/(\.gz)?$/i, '').replace(/\.[^.]*$/, '') + '.mgt';
+        a.download = (names[0] || 'disk').replace(/(\.gz)?$/i, '').replace(/\.[^.]*$/, '') + '.' + ext;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
