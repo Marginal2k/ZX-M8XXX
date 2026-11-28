@@ -160,6 +160,7 @@ export class SamCoupe {
         this.cpu.portRead = (port) => this.portIn(port);
         this.cpu.portWrite = (port, val) => this.portOut(port, val);
         this.tape = new SamTape(this);
+        this.kempston = 0;                         // a Kempston joystick on port 31 (bits 0-4, high: pressed)
         this.mouse = { dx: 0, dy: 0, buttons: 0, pos: 0, last: 0, buf: new Uint8Array(9) };
         // The disks turn in real time: 300 rpm, ten frames a revolution
         this.frameBase = 0;
@@ -322,6 +323,7 @@ export class SamCoupe {
                 if (onScreen && lt >= 2 * SCREEN_T) return ((lt - 2 * SCREEN_T) & 0xFC) | (this.border & 1);
                 return this.border & 1;              // LPEN
             }
+            case 0x1F: return this.kempston & 0x1F;   // Kempston joystick (SimCoupe's KEMPSTON_PORT)
             case 0xFA: return this.lmpr;
             case 0xFB: return this.hmpr;
             case 0xFC: return this.vmpr | 0x80;       // bit 7: MIDI in, idle high

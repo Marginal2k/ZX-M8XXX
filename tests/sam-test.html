@@ -122,6 +122,10 @@
             assert((m.portIn(0x00F9) & 0x01) !== 0, 'line 255: none');
             m.cpu.tStates = (TOP + 50) * T_LINE + 10;
             assert(m.portIn(0x01F8) === 50, 'HPEN gives the screen line');
+            m.kempston = 0x10;
+            assert(m.portIn(0x001F) === 0x10, 'Kempston on port 31: fire (bit 4)');
+            m.kempston = 0;
+            assert(m.portIn(0x001F) === 0, 'and nothing pressed');
         }
 
         // ---------------------------------------------------------------

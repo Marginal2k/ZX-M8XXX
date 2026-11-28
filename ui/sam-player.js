@@ -12,9 +12,20 @@
 // TZX, WAV) is LOADed "" with the ROM loader's blocks loaded at once. Not
 // here yet: the on-screen joystick and keyboard of the Spectrum player.
 
-import { createSamApp } from './sam-app.js';
+import { createSamApp, KEYMAP } from './sam-app.js';
+import { createTouchJoystick } from './touch-joystick.js';
+import { createSamKeyboard } from './sam-vkbd.js';
 
-const ICON = { reset: '⟲', sound: '🔊', mute: '🔇', full: '⛶' };
+const ICON = { reset: '⟲', sound: '🔊', mute: '🔇', full: '⛶', joy: '🎮', keys: '⌨' };
+
+// The SAM's joysticks, as SimCoupe wires them: joystick 1 is keys 6-0 (the
+// Spectrum's Sinclair 1 / Interface 2 right port), joystick 2 keys 1-5; a
+// Kempston interface on port 31
+const SAM_JOYS = [
+    { id: 'sinclair1', name: 'SAM 1 (6-0)' },
+    { id: 'sinclair2', name: 'SAM 2 (1-5)' },
+    { id: 'kempston', name: 'Kempston' },
+];
 
 // The codes and the files that make a release a SAM one
 export function isSamRelease(opts = {}) {
@@ -104,10 +115,41 @@ export async function createSamPlayer(container, opts = {}) {
     document.addEventListener('keydown', onGesture);
     unmute.addEventListener('click', () => { startAudio(); canvas.focus({ preventScroll: true }); });
 
+    // ---- on-screen joystick and keyboard, for phones and tablets ----
+    // The Spectrum player's joystick, on a stand-in for the machine it drives:
+    // its keys become SAM keys, its Kempston the SAM's port 31
+    const m = app.machine;
+    const samInput = {
+        get kempstonState() { return m.kempston; },
+        set kempstonState(v) { m.kempston = v & 0x1F; },
+        kempstonExtendedState: 0, kempstonExtendedEnabled: false,
+        ula: { keyDown: (c) => KEYMAP[c] && m.key(KEYMAP[c], true), keyUp: (c) => KEYMAP[c] && m.key(KEYMAP[c], false) },
+    };
+    const touchScreen = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    const codes = (opts.hardware || []).map(c => String(c).toLowerCase());
+    const joyType = SAM_JOYS.some(j => j.id === opts.touchType) ? opts.touchType : codes.includes('kempston') ? 'kempston' : 'sinclair1';
+    const joy = createTouchJoystick({ spectrum: samInput, parent: screen, type: joyType });
+    const selJoy = document.createElement('select');
+    selJoy.className = 'zxm8-joytype';
+    selJoy.title = 'Joystick';
+    for (const t of SAM_JOYS) selJoy.add(new Option(t.name, t.id));
+    selJoy.value = joy.type;
+    selJoy.addEventListener('change', () => { joy.setType(selJoy.value); canvas.focus({ preventScroll: true }); });
+    const kbd = createSamKeyboard({ parent: container, machine: m });
+
     // ---- controls ----
     const btnSound = button(soundOn ? ICON.sound : ICON.mute, 'Sound on / off', () => setSound(!soundOn));
     button(ICON.reset, 'Start again', () => restart());
+    const btnJoy = button(ICON.joy, 'On-screen joystick', () => showJoystick(!joy.visible));
+    bar.insertBefore(selJoy, btnJoy);
+    const btnKeys = button(ICON.keys, 'On-screen keyboard', () => btnKeys.classList.toggle('active', kbd.toggle()));
     button(ICON.full, 'Full screen', () => setFullscreen(!document.fullscreenElement));
+    function showJoystick(on) {
+        joy.show(on);
+        btnJoy.classList.toggle('active', on);
+        selJoy.hidden = !on;
+    }
+    showJoystick(opts.touch !== undefined ? !!opts.touch : touchScreen);
 
     function setSound(on) {
         soundOn = !!on;
@@ -132,6 +174,8 @@ export async function createSamPlayer(container, opts = {}) {
     function destroy() {
         if (destroyed) return;
         destroyed = true;
+        joy.destroy();
+        kbd.destroy();
         app.destroy();
         container.removeEventListener('pointerdown', onGesture);
         document.removeEventListener('keydown', onGesture);

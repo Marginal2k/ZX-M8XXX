@@ -200,7 +200,11 @@ full screen), the same methods and messages. An `.mgt` with no codes stays a
 - Needs `roms/samcoupe.rom` (ROM 3.0) next to the Spectrum ROMs.
 - `sammouse`: the SAM mouse is always there; a click on the screen captures
   the pointer, Esc lets it go.
-- Not yet: the on-screen joystick and keyboard.
+- Phones and tablets: the on-screen joystick plays SAM joystick 1 (keys
+  6-0, as SimCoupe wires it), joystick 2 (keys 1-5) or a Kempston on port
+  31 (`kempston` in the hardware list picks it); the ⌨ button opens a SAM
+  keyboard (ui/sam-vkbd.js: F0-F9, ESC, TAB, CAPS, EDIT, INV, CNTRL, the
+  cursor keys; SHIFT, SYMBOL and CNTRL stick for the next key).
 
 The returned object has `sam` (the machine) in place of `spectrum`, and
 `runFrames(n)` for scripts.
