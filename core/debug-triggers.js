@@ -702,7 +702,7 @@ export const TriggerEngine = {
             }
             // Rebuild screen breakpoint Sets if this is a screen trigger
             if (this.triggers[index].type === 'screen_bitmap' || this.triggers[index].type === 'screen_attr') {
-                this._rebuildScreenBreakpointSets();
+                if (this._rebuildScreenBreakpointSets) this._rebuildScreenBreakpointSets();
             }
             return this.triggers[index].enabled;
         }
@@ -1006,7 +1006,7 @@ export const TriggerEngine = {
         this._rebuildExecBreakpointSet();
 
         // Rebuild screen breakpoint Sets
-        this._rebuildScreenBreakpointSets();
+        if (this._rebuildScreenBreakpointSets) this._rebuildScreenBreakpointSets();
     },
 
     /**

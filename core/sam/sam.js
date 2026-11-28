@@ -43,6 +43,11 @@
  *           SimCoupe does it: while the ROM's BOOT loads track 4 a disk
  *           holding SAMDOS stands in for it, then the disk is back
  *
+ *   debug   the Spectrum's trigger engine (core/debug-triggers.js): exec,
+ *           memory and port breakpoints with conditions, page-qualified
+ *           ("12:8000", "R1:D000"); stepInto / stepOver / runToAddress /
+ *           runToInterrupt / runToRet, one instruction at a time
+ *
  * Not yet: MIDI, a tape.
  */
 
@@ -50,6 +55,7 @@ import { Z80 } from '../z80.js';
 import { SAA1099, SAA_CLOCK } from '../saa1099.js';
 import { VL1772 } from './vl1772.js';
 import { hasDos, makeFileDisk } from './sam-disk.js';
+import { initTriggerState, mixTriggers } from '../debug-triggers.js';
 
 export const CPU_CLOCK = 6000000;
 export const T_LINE = 384;
@@ -128,6 +134,12 @@ export class SamCoupe {
         this.secOff = [0, 0, 0, 0];
         this.secRO = [true, false, false, false];
         this.cpu = new Z80(this);
+        initTriggerState(this);
+        this.running = false;                  // inside _run: watchpoints and port triggers count
+        this._memWatch = false;
+        this._portWatch = false;
+        this._skipBreakAt = -1;                // the PC a break left off at: run past it once
+        this.onBreak = null;
         this.cpu.portRead = (port) => this.portIn(port);
         this.cpu.portWrite = (port, val) => this.portOut(port, val);
         this.mouse = { dx: 0, dy: 0, buttons: 0, pos: 0, last: 0, buf: new Uint8Array(9) };
@@ -190,10 +202,15 @@ export class SamCoupe {
 
     read(addr) {
         const s = addr >> 14;
-        return this.secBuf[s][this.secOff[s] + (addr & 0x3FFF)];
+        const v = this.secBuf[s][this.secOff[s] + (addr & 0x3FFF)];
+        if (this._memWatch && this._inCpuExecution && !this.cpu.isFetching && !this._suppressWatchpoints) {
+            this.checkReadWatchpoint(addr, v);
+        }
+        return v;
     }
 
     write(addr, val) {
+        if (this._memWatch && this._inCpuExecution && !this._suppressWatchpoints) this.checkWriteWatchpoint(addr, val);
         const s = addr >> 14;
         if (this.secRO[s]) return;
         const a = this.secOff[s] + (addr & 0x3FFF), buf = this.secBuf[s];
@@ -262,6 +279,7 @@ export class SamCoupe {
     }
 
     portIn(port) {
+        if (this._portWatch && this.running) this._portTrigger(port, 0xFF, false);
         const lo = port & 0xFF, hi = port >> 8, t = this.cpu.tStates;
         if ((lo & 0xF8) === 0xE0 || (lo & 0xF8) === 0xF0) {
             if (!(lo & 0x08)) return this.drives[(lo >> 4) & 1].read(lo & 3);
@@ -291,6 +309,7 @@ export class SamCoupe {
     }
 
     portOut(port, val) {
+        if (this._portWatch && this.running) this._portTrigger(port, val, true);
         const lo = port & 0xFF, t = this.cpu.tStates;
         if ((lo & 0xF8) === 0xE0 || (lo & 0xF8) === 0xF0) {
             const d = this.drives[(lo >> 4) & 1];
@@ -318,30 +337,163 @@ export class SamCoupe {
     }
 
     // ---- the frame ----
-    runFrame() {
+    // ---- the frame, an instruction at a time ----
+    // One instruction, an interrupt taken, or a HALT's NOP. True when it ended
+    // the frame.
+    _step() {
         const cpu = this.cpu;
-        while (cpu.tStates < T_FRAME) {
-            const t = cpu.tStates;
-            if (cpu.iff1 && this._status(t) !== 0x1F) {
-                cpu.tStates += cpu.interrupt();
-                continue;
-            }
-            if (cpu.halted) {
-                if (cpu.eiPending) { cpu.eiPending = false; cpu.iff1 = cpu.iff2 = true; }
-                cpu.tStates += 4;
-                cpu.incR();
-            } else {
-                this._startInstr();
-                cpu.execute();
-            }
+        this._intTaken = false;
+        const sec = cpu.pc >> 14;
+        this._lastOp = this.secBuf[sec][this.secOff[sec] + (cpu.pc & 0x3FFF)];
+        if (cpu.iff1 && this._status(cpu.tStates) !== 0x1F) {
+            cpu.tStates += cpu.interrupt();
+            this._intTaken = true;
+        } else if (cpu.halted) {
+            if (cpu.eiPending) { cpu.eiPending = false; cpu.iff1 = cpu.iff2 = true; }
+            cpu.tStates += 4;
+            cpu.incR();
+        } else {
+            this._startInstr();
+            this._currentInstrPC = cpu.pc;
+            this._inCpuExecution = true;
+            cpu.execute();
+            this._inCpuExecution = false;
         }
+        if (cpu.tStates >= T_FRAME) { this._endFrame(); return true; }
+        return false;
+    }
+
+    _endFrame() {
         this.renderTo(T_FRAME);
         this._audioFrame();
-        cpu.tStates -= T_FRAME;
+        this.cpu.tStates -= T_FRAME;
         this.frameBase += T_FRAME;
         for (const d of this.drives) d.frameEnd();
         this.rpos = 0;
         this.frames++;
+    }
+
+    // Run to the end of the frame. Returns null, or what stopped it (a
+    // trigger: {trigger, addr | port, type | direction}); the machine is then
+    // between two instructions, and the next runFrame goes on from there.
+    runFrame() {
+        if (!this.triggers.length) {           // nothing to watch: the plain loop
+            while (!this._step());
+            return null;
+        }
+        return this._run(null, true, Infinity);
+    }
+
+    // Step until `until()` is true, the frame ends (toFrameEnd), a trigger
+    // fires, or maxT T-states have gone
+    _run(until, toFrameEnd, maxT) {
+        const cpu = this.cpu;
+        const skip = this._skipBreakAt;
+        this._skipBreakAt = -1;
+        this.running = true;
+        let spent = 0, first = true;
+        try {
+            for (;;) {
+                if (this.execBreakpointSet.size && !cpu.halted && !(first && cpu.pc === skip)) {
+                    const t = this.checkExecTriggers(cpu.pc);
+                    if (t) return this._break({ trigger: t, addr: cpu.pc, type: 'exec' });
+                }
+                first = false;
+                const t0 = cpu.tStates;
+                const ended = this._step();
+                if (this.triggerHit) {
+                    this.triggerHit = this.watchpointHit = this.portBreakpointHit = false;
+                    return this._break(this.lastTrigger);
+                }
+                if (until && until()) return { type: 'done' };
+                if (ended && toFrameEnd) return null;
+                spent += ended ? cpu.tStates + T_FRAME - t0 : cpu.tStates - t0;
+                if (spent > maxT) return { type: 'timeout' };
+            }
+        } finally {
+            this.running = false;
+        }
+    }
+
+    _break(hit) {
+        this.lastTrigger = hit;
+        this._skipBreakAt = this.cpu.pc;
+        this.renderTo(this.cpu.tStates);
+        if (this.onBreak) this.onBreak(hit);
+        return hit;
+    }
+
+    _portTrigger(port, val, isOut) {
+        const trigger = this.checkPortTriggers(port, val, isOut);
+        if (!trigger) return;
+        const direction = isOut ? 'out' : 'in';
+        this.portBreakpointHit = this.triggerHit = true;
+        this.lastPortBreakpoint = { port, direction, val, breakpoint: trigger };
+        this.lastTrigger = { trigger, port, val, direction };
+    }
+
+    // ---- the debugger's commands ----
+    stepInto() {
+        if (this.cpu.halted) return this._run(() => !this.cpu.halted, false, 2 * T_FRAME);
+        this._step();
+        return { type: 'done' };
+    }
+
+    // A CALL, RST, DJNZ, a block instruction or HALT runs until the next
+    // instruction after it; anything else is one step
+    stepOver(maxT = 500 * T_FRAME) {
+        const cpu = this.cpu, pc = cpu.pc, op = this.read(pc);
+        let len = 0;
+        if (op === 0xCD || (op & 0xC7) === 0xC4) len = 3;                 // CALL, CALL cc
+        else if ((op & 0xC7) === 0xC7) len = 1;                           // RST
+        else if (op === 0x10) len = 2;                                    // DJNZ
+        else if (op === 0x76) len = 1;                                    // HALT
+        else if (op === 0xED && (this.read((pc + 1) & 0xFFFF) & 0xF4) === 0xB0) len = 2;   // LDIR & co
+        if (!len) return this.stepInto();
+        const target = (pc + len) & 0xFFFF, sp0 = cpu.sp;
+        return this._run(() => cpu.pc === target && cpu.sp >= sp0, false, maxT);
+    }
+
+    runToAddress(addr, maxT = 500 * T_FRAME) {
+        return this._run(() => this.cpu.pc === (addr & 0xFFFF), false, maxT);
+    }
+
+    runToInterrupt(maxT = 2 * T_FRAME) {
+        return this._run(() => this._intTaken, false, maxT);
+    }
+
+    // Until a RET (any kind) takes the stack above where it is now
+    runToRet(maxT = 500 * T_FRAME) {
+        const sp0 = this.cpu.sp;
+        const isRet = (op) => op === 0xC9 || (op & 0xC7) === 0xC0 || op === 0xED;
+        return this._run(() => this.cpu.sp > sp0 && isRet(this._lastOp), false, maxT);
+    }
+
+    // ---- what the trigger engine asks of a machine ----
+    debugPageCount() { return PAGES; }
+
+    // The page at an address: 0-31 RAM, 'R0' / 'R1' ROM, 'X<n>' external
+    getCurrentPageForAddr(addr) {
+        const s = (addr >> 14) & 3, b = this.secBuf[s];
+        if (b === this.ram) return this.secOff[s] >> 14;
+        if (b === this.rom) return this.secOff[s] ? 'R1' : 'R0';
+        if (b === this.ext) return 'X' + (this.secOff[s] >> 14);
+        return null;
+    }
+
+    updateMemoryCallbacksFlag() {
+        const on = (t) => t.enabled !== false;
+        this._memWatch = this.triggers.some(t => on(t) && (t.type === 'read' || t.type === 'write' || t.type === 'rw'));
+        this._portWatch = this.triggers.some(t => on(t) && t.type.startsWith('port'));
+    }
+
+    // The paging, for the debugger's display
+    getPagingState() {
+        return {
+            lmpr: this.lmpr, hmpr: this.hmpr, vmpr: this.vmpr, lepr: this.lepr, hepr: this.hepr,
+            mode: this._mode() + 1,
+            sections: [0, 1, 2, 3].map(s => this.getCurrentPageForAddr(s << 14)),
+        };
     }
 
     // ---- the picture ----
@@ -522,3 +674,5 @@ export class SamCoupe {
 }
 
 function hi4(port) { return (port >> 8) & 0x0F; }
+
+mixTriggers(SamCoupe);

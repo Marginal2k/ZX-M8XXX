@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>SAM Coupé Tests</title>
+    <style>
+        body { font-family: monospace; background: #1e1e2e; color: #cdd6f4; padding: 16px; }
+        #summary { margin: 8px 0 16px; font-size: 15px; }
+        .pass { color: #a6e3a1; }
+        .fail { color: #f38ba8; }
+        .note { color: #f9e2af; }
+        .section { color: #89b4fa; font-weight: bold; margin-top: 12px; }
+        #log div { white-space: pre; }
+    </style>
+</head>
+<body>
+    <h2>SAM Coupé Tests</h2>
+    <div id="summary">running…</div>
+    <div id="log"></div>
+
+    <script type="module">
+        // The SAM Coupé page's core (core/sam/): paging, the palette, the
+        // interrupts, the VL1772 port and its disks, the DOS stand-in, and the
+        // debugger on the shared trigger engine. The parts that run the ROM
+        // need roms/samcoupe.rom (not in the repository); without it they are
+        // reported as skipped, not failed.
+        import { SamCoupe, PALETTE, T_LINE, T_FRAME, TOP, KEYS } from '../core/sam/sam.js';
+        import { SamDisk, loadSamDisk, hasDos, makeFileDisk, MGT_SIZE } from '../core/sam/sam-disk.js';
+        import { VL1772, crcBlock, RECORD_NOT_FOUND, CRC_ERROR, DRQ, BUSY } from '../core/sam/vl1772.js';
+
+        const TEST_VERSION = '1.0.0';
+        const logEl = document.getElementById('log');
+        const summaryEl = document.getElementById('summary');
+        let passed = 0, failed = 0;
+        function log(msg, cls = '') {
+            const d = document.createElement('div');
+            d.className = cls; d.textContent = msg; logEl.appendChild(d);
+        }
+        function section(name) { log('\n ' + name + ' ', 'section'); }
+        function assert(cond, name, detail = '') {
+            if (cond) { passed++; log('  ' + name, 'pass'); }
+            else { failed++; log('  ' + name + (detail ? ': ' + detail : ''), 'fail'); }
+            summaryEl.innerHTML = `v${TEST_VERSION} | <span class="pass">Pass: ${passed}</span> | ` +
+                `<span class="fail">Fail: ${failed}</span> | Total: ${passed + failed}`;
+        }
+
+        // ---------------------------------------------------------------
+        section('Palette');
+        {
+            assert(PALETTE[0] === 0xFF000000, 'colour 0 is black');
+            assert(PALETTE[127] === 0xFFFFFFFF, 'colour 127 is white');
+            // G1 R1 B1 BRIGHT G0 R0 B0: bright alone is a dark grey (1/7 of each gun)
+            const g = Math.round(255 / 7);
+            assert(PALETTE[8] === (0xFF000000 | (g << 16) | (g << 8) | g) >>> 0, 'BRIGHT alone is 1/7 grey');
+            assert((PALETTE[0x22] & 0xFF) === Math.round(6 * 255 / 7), 'R1+R0 is 6/7 red');
+            assert((PALETTE[0x2A] & 0xFF) === 255 && (PALETTE[0x2A] >> 8 & 0xFF) === Math.round(255 / 7),
+                   'R1+R0+BRIGHT is full red (and BRIGHT lifts the others to 1/7)');
+        }
+
+        // ---------------------------------------------------------------
+        section('Paging');
+        {
+            const m = new SamCoupe();
+            for (let p = 0; p < 32; p++) m.ram[p << 14] = p;
+            m.rom[0] = 0xA0; m.rom[0x4000] = 0xA1;
+            m.portOut(0x00FA, 0x00); m.portOut(0x00FB, 0x00);
+            assert(m.read(0x0000) === 0xA0, 'LMPR 0: ROM0 in section A');
+            assert(m.read(0x4000) === 1, 'section B: the page after LMPR\'s');
+            m.portOut(0x00FA, 0x20 | 5);
+            assert(m.read(0x0000) === 5 && m.read(0x4000) === 6, 'LMPR b5: RAM page 5 in A, 6 in B');
+            m.portOut(0x00FA, 0x20 | 31);
+            assert(m.read(0x4000) === 0, 'page 31 + 1 wraps to 0');
+            m.portOut(0x00FB, 7);
+            assert(m.read(0x8000) === 7 && m.read(0xC000) === 8, 'HMPR 7: pages 7, 8 in C, D');
+            m.portOut(0x00FA, 0x40 | 0x20 | 5);
+            assert(m.read(0xC000) === 0xA1, 'LMPR b6: ROM1 in section D');
+            m.portOut(0x00FA, 0x80 | 0x20 | 5);
+            m.write(0x0000, 0x55);
+            assert(m.read(0x0000) === 5, 'LMPR b7: section A write-protected');
+            m.write(0x4000, 0x66);
+            assert(m.read(0x4000) === 0x66, 'section B is not');
+            // external memory
+            m.portOut(0x0080, 3); m.portOut(0x0081, 70); m.portOut(0x00FB, 0x80);
+            m.write(0x8000, 0x77);
+            assert(m.ext[3 << 14] === 0x77, 'HMPR b7: section C writes external page LEPR');
+            assert(m.read(0xC000) === 0xFF, 'past the first megabyte reads #FF');
+            assert(m.getCurrentPageForAddr(0x8000) === 'X3' && m.getCurrentPageForAddr(0xC000) === null,
+                   'the debugger names them X3 and none');
+            m.portOut(0x00FB, 0x00);
+            assert(m.read(0x8000) === 0, 'HMPR b7 off: internal again');
+        }
+
+        // ---------------------------------------------------------------
+        section('Ports and interrupts');
+        {
+            const m = new SamCoupe();
+            assert(m.portIn(0x00FC) & 0x80, 'VMPR reads MIDI in (bit 7) high');
+            m.key('A', true);
+            assert((m.portIn(0xFDFE) & 1) === 0, 'A on row 1 (A9 low), bit 0');
+            m.key('A', false);
+            m.key('F5', true);
+            assert((m.portIn(0xFDF9) & 0x40) === 0, 'F5 on row 1, bit 6, read on port 249');
+            m.key('F5', false);
+            m.key('UP', true);
+            assert((m.portIn(0xFFFE) & 0x02) === 0, 'UP on the cursor row (A8-A15 high), bit 1');
+            m.key('UP', false);
+            m.cpu.tStates = 10;
+            assert((m.portIn(0x00F9) & 0x08) === 0, 'frame interrupt active at T 10');
+            m.cpu.tStates = 200;
+            assert((m.portIn(0x00F9) & 0x08) !== 0, 'and gone by T 200 (128 T-states)');
+            m.portOut(0x00F9, 100);
+            m.cpu.tStates = (TOP + 100) * T_LINE + 5;
+            assert((m.portIn(0x00F9) & 0x01) === 0, 'line interrupt 100 at (68 + 100) * 384');
+            m.portOut(0x00F9, 0xFF);
+            assert((m.portIn(0x00F9) & 0x01) !== 0, 'line 255: none');
+            m.cpu.tStates = (TOP + 50) * T_LINE + 10;
+            assert(m.portIn(0x01F8) === 50, 'HPEN gives the screen line');
+        }
+
+        // ---------------------------------------------------------------
+        section('Disks: images');
+        {
+            const mgt = new Uint8Array(MGT_SIZE);
+            const off = (c, h, s) => ((c * 2 + h) * 10 + s - 1) * 512;
+            mgt[off(3, 1, 7)] = 0x37; mgt[off(79, 0, 10) + 511] = 0x99;
+            const d = loadSamDisk(mgt);
+            assert(d.getSector(3, 1, 6).id.sector === 7, 'MGT: track 3 side 1, 7th sector is number 7');
+            assert(d.readData(3, 1, 6).data[0] === 0x37, 'its data');
+            assert(d.isPlain() && d.toFile().ext === 'mgt', 'a plain disk saves as an MGT');
+            assert(d.toFile().data[off(79, 0, 10) + 511] === 0x99, 'byte for byte');
+            const id = d.getSector(0, 0, 0).id;
+            const crc = crcBlock([0xA1, 0xA1, 0xA1, 0xFE, 0, 0, 1, 2]);
+            assert(id.crc1 === crc >> 8 && id.crc2 === (crc & 0xFF), 'ID field CRC is CCITT over A1 A1 A1 FE C H R N');
+            // SAD: side by side, track by track
+            const sad = new Uint8Array(22 + MGT_SIZE);
+            sad.set([..."Aley's disk backup"].map(c => c.charCodeAt(0)));
+            sad.set([2, 80, 10, 8], 18);
+            sad[22 + ((1 * 80 + 3) * 10 + 6) * 512] = 0x42;
+            assert(loadSamDisk(sad).readData(3, 1, 6).data[0] === 0x42, 'SAD: side 1 track 3 sector 7');
+            // a disk in its own format survives a save as EDSK
+            d.formatTrack(5, 0, [{ id: { cyl: 5, head: 0, sector: 0x41, size: 3 }, data: new Uint8Array(1024).fill(7) }]);
+            assert(!d.isPlain() && d.toFile().ext === 'dsk', 'a track of one 1K sector #41: saves as EDSK');
+            const back = loadSamDisk(d.toEdsk());
+            assert(back.getSector(5, 0, 0).id.sector === 0x41 && back.readData(5, 0, 0).data[1023] === 7,
+                   'and reads back the same');
+        }
+
+        // ---------------------------------------------------------------
+        section('VL1772');
+        {
+            const disk = new SamDisk();
+            for (let c = 0; c < 80; c++) for (let h = 0; h < 2; h++) for (let s = 1; s <= 10; s++) {
+                const data = new Uint8Array(512).fill(c ^ s);
+                disk.track(c, h).push({ id: { cyl: c, head: h, sector: s, size: 2 }, idCrcError: false, dataStatus: 0, data });
+            }
+            disk.track(2, 0)[3].dataStatus = CRC_ERROR;              // sector 4 of track 2: a bad CRC
+            const f = new VL1772();
+            f.insert(disk);
+            const cmd = (v, side = 0) => { f.write(0, v, side); return f.read(0); };
+            cmd(0x00);                                                // restore
+            assert(f.read(0) & 0x04, 'RESTORE: TRACK00');
+            f.write(3, 2); cmd(0x10);                                 // seek 2
+            assert(f.read(1) === 2 && f.cyl === 2, 'SEEK to 2');
+            f.write(2, 5);
+            let st = cmd(0x80);
+            assert(st & DRQ, 'READ SECTOR: DRQ');
+            let n = 0, last = 0;
+            while (f.read(0) & DRQ) { last = f.read(3); n++; }
+            assert(n === 512 && last === (2 ^ 5), '512 bytes of sector 5', `${n} bytes, last ${last}`);
+            assert(!(f.read(0) & BUSY), 'then not busy');
+            f.write(2, 4); cmd(0x80);
+            while (f.read(0) & DRQ) f.read(3);
+            assert(f.read(0) & CRC_ERROR, 'a sector with a data CRC error says so');
+            f.write(2, 11); st = cmd(0x80);
+            assert(st & RECORD_NOT_FOUND, 'sector 11: RECORD NOT FOUND');
+            cmd(0xC0);
+            const idf = []; while (f.read(0) & DRQ) idf.push(f.read(3));
+            assert(idf.length === 6 && idf[0] === 2 && idf[1] === 0, 'READ ADDRESS: 6 bytes, C H R N CRC');
+            assert(f.read(2) === 2, 'and the track number in the sector register');
+            // write a sector, read it back
+            f.write(2, 1); cmd(0xA0);
+            let w = 0; while (f.read(0) & DRQ) f.write(3, w++ & 0xFF);
+            assert(w === 512 && disk.readData(2, 0, 0).data[100] === 100, 'WRITE SECTOR lands on the disk');
+            // lost data: 16 looks at the status with no data taken
+            f.write(2, 1); cmd(0x80);
+            for (let i = 0; i < 16; i++) f.read(0);
+            assert(f.read(0) & 0x04, 'LOST DATA after 16 idle status reads');
+            // index pulse from the rotation
+            let now = 0;
+            const g = new VL1772(() => now, 1000);
+            g.insert(disk); g.write(0, 0x00, 0);
+            now = 2; const a = g.read(0) & 0x02;
+            now = 500; const b = g.read(0) & 0x02;
+            assert(a && !b, 'INDEX at the start of a revolution, not half way round');
+        }
+
+        // ---------------------------------------------------------------
+        section('A DOS for disks without one');
+        {
+            const code = new Uint8Array(10000);
+            ['B', 'O', 'O', 'T'].forEach((c, i) => { code[247 + i] = c.charCodeAt(0); });
+            const { disk, last } = makeFileDisk(code);
+            assert(hasDos(disk), 'the made disk boots: BOOT at byte 256 of track 4 sector 1');
+            assert(last.track === 5 && last.sector === 10, '10009 bytes: 20 sectors, the last at 5/10');
+            assert(!hasDos(loadSamDisk(new Uint8Array(MGT_SIZE))), 'an empty disk has no DOS');
+        }
+
+        // ---------------------------------------------------------------
+        section('The ROM, and the debugger');
+        let rom = null;
+        try {
+            const r = await fetch('../roms/samcoupe.rom');
+            if (r.ok) rom = await r.arrayBuffer();
+        } catch (e) { /* none */ }
+        if (!rom || rom.byteLength !== 32768) {
+            log('  skipped: roms/samcoupe.rom is not here', 'note');
+        } else {
+            const m = new SamCoupe();
+            m.loadRom(rom);
+            for (let i = 0; i < 300; i++) m.runFrame();
+            const press = (k) => { m.key(k, true); for (let i = 0; i < 4; i++) m.runFrame(); m.key(k, false); for (let i = 0; i < 4; i++) m.runFrame(); };
+            press('SPACE'); for (let i = 0; i < 50; i++) m.runFrame();
+            for (const k of ['P', 'R', 'I', 'N', 'T', 'SPACE', '7']) press(k);
+            press('RETURN'); for (let i = 0; i < 20; i++) m.runFrame();
+            assert(((m.vmpr >> 5) & 3) === 3, 'BASIC in mode 4');
+            // what PRINT 7 printed: the screen is not one colour
+            const fb = m.fb; let other = 0;
+            for (let i = 0; i < fb.length; i++) if (fb[i] !== fb[0]) other++;
+            assert(other > 100, 'PRINT 7 drew something', `${other} pixels`);
+
+            m.addTrigger({ type: 'exec', start: 0x0038 });
+            let hit = m.runFrame();
+            assert(hit && hit.type === 'exec' && m.cpu.pc === 0x38, 'exec breakpoint at 0038 stops there');
+            hit = null; for (let i = 0; i < 3 && !hit; i++) hit = m.runFrame();
+            assert(hit && m.cpu.pc === 0x38, 'resumed, it runs past and stops at the next interrupt');
+            m.clearTriggers();
+            m.addTrigger({ type: 'exec', start: 0x0038, page: 'R1' });
+            hit = null; for (let i = 0; i < 3 && !hit; i++) hit = m.runFrame();
+            assert(!hit, 'R1:0038 does not stop while ROM0 is paged there');
+            m.clearTriggers();
+            assert(m.parseAddressSpec('31:8000') && !m.parseAddressSpec('32:8000'), 'pages 0-31');
+            m.addTrigger({ type: 'port_in', start: 0xFE, mask: 0xFF });
+            hit = null; for (let i = 0; i < 3 && !hit; i++) hit = m.runFrame();
+            assert(hit && hit.direction === 'in' && (hit.port & 0xFF) === 0xFE, 'port breakpoint: the keyboard scan reads 254');
+            m.clearTriggers();
+            m.addTrigger({ type: 'write', start: 0x5C00, end: 0x5CFF });
+            hit = null; for (let i = 0; i < 3 && !hit; i++) hit = m.runFrame();
+            assert(hit && hit.type === 'write' && hit.addr >= 0x5C00 && hit.addr <= 0x5CFF, 'write watchpoint on the system variables');
+            m.clearTriggers();
+            let r = m.runToInterrupt();
+            assert(r.type === 'done' && m.cpu.pc === 0x38, 'runToInterrupt: at 0038');
+            const sp0 = m.cpu.sp;
+            r = m.runToRet();
+            assert(r.type === 'done' && m.cpu.sp > sp0, 'runToRet: the stack is back above');
+            let call = -1;
+            for (let i = 0; i < 2000 && call < 0; i++) { if (m.read(m.cpu.pc) === 0xCD) call = m.cpu.pc; else m.stepInto(); }
+            if (call >= 0) {
+                const sp = m.cpu.sp;
+                m.stepOver();
+                assert(m.cpu.pc === ((call + 3) & 0xFFFF) && m.cpu.sp === sp, 'stepOver a CALL: the next instruction, same stack');
+            } else {
+                log('  no CALL met to step over', 'note');
+            }
+        }
+
+        section('Done');
+        log(`\n${passed} passed, ${failed} failed`, failed ? 'fail' : 'pass');
+        document.title = failed ? 'FAIL' : 'PASS';
+    </script>
+</body>
+</html>
