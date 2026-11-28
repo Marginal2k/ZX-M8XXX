@@ -50,6 +50,39 @@ export function findRomHooks(rom) {
     return out;
 }
 
+// A SAM tape header, from a block's bytes (flag 1, then 80 bytes), or null.
+// As the SAM ROM saves it (checked on SAM tapes):
+//   0       type: 16 program, 17 number array, 18 string array, 19 code, 20 screen
+//   1-15    name
+//   16-24   a program's lengths in page form (page, offset): to the end of the
+//           program (its 0xFF), the numeric variables, the string variables
+//   31-33   where it loads, in page form
+//   34-36   its length, in page form
+//   37-39   a program's autostart line (37 = FF: none), or code's run address
+// Page form: a page (bits 0-4) and an offset 8000-BFFF; page 0 is at 4000.
+export function parseSamTapeHeader(block) {
+    if (!block || block.length < 81 || block[0] !== 0x01) return null;
+    const h = block.subarray(1), type = h[0];
+    if (type < 16 || type > 20) return null;
+    const pageForm = (i) => ((h[i] & 0x1F) + 1) * 16384 + ((h[i + 1] | (h[i + 2] << 8)) & 0x3FFF);
+    const size = (i) => (h[i] & 0x1F) * 16384 + ((h[i + 1] | (h[i + 2] << 8)) & 0x3FFF);
+    const names = { 16: 'Program', 17: 'Number array', 18: 'Character array', 19: 'Bytes', 20: 'Screen' };
+    const out = {
+        samType: type,
+        typeId: type === 20 ? 3 : type - 16,    // as a Spectrum header's: 0 program, 3 bytes
+        typeName: 'SAM ' + names[type],
+        name: String.fromCharCode(...h.subarray(1, 16)).replace(/[^ -~]/g, ' ').trim(),
+        dataLength: size(34),
+        startAddress: pageForm(31),
+        autostart: null, varsOffset: null, execAddress: null,
+    };
+    if (type === 16) {
+        out.varsOffset = size(16);
+        out.autostart = h[37] === 0xFF ? null : h[38] | (h[39] << 8);
+    } else if (h[37] !== 0xFF) out.execAddress = pageForm(37);
+    return out;
+}
+
 // the blocks a loader hears or that steer the tape; the rest (texts, archive
 // info, groups) the fast loading steps over
 const SIGNAL = new Set(['data', 'tone', 'pulses', 'directRecording', 'cswRecording', 'generalizedData', 'pause', 'stop', 'loopStart', 'loopEnd', 'jump']);

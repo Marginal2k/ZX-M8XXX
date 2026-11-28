@@ -16,6 +16,7 @@ import { TRDLoader, SCLLoader, MGTLoader, MDRLoader, OPDLoader, DidaktikLoader, 
 import { HcDiskLoader } from '../core/loaders/disk-hc.js';
 import { KdosLoader } from '../core/loaders/disk-kdos.js';
 import { BASIC_TOKENS, decodeBasicProgram } from '../core/basic-tokens.js';
+import { parseSamTapeHeader } from '../core/sam/sam-tape.js';
 import { findPackedScreenInBlock, rcsToScr, looksRcsEncoded } from '../core/depackers.js';
 import { trdBasicAutostartLine, extractTrdFileDescriptor, shapeBasicEntry, addMetaFromDescriptor, isMonoloader, splitMonoloader } from './disk-file-copy.js';
 import { initExplorerBanks } from './explorer-banks.js';
@@ -995,6 +996,19 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
         return { type: 'unknown', size: len };
     }
 
+    // A TAP block that is a SAM Coupé header: its fields as a Spectrum
+    // header's (typeId 0 program, 3 bytes), and the header itself as .sam
+    function samTapHeader(blockInfo) {
+        const sh = parseSamTapeHeader(blockInfo.data);
+        if (!sh) return false;
+        Object.assign(blockInfo, {
+            blockType: 'header', headerType: sh.typeId, typeName: sh.typeName, name: sh.name,
+            dataLength: sh.dataLength, autostart: sh.autostart, varsOffset: sh.varsOffset, sam: sh,
+        });
+        if (sh.typeId === 3) blockInfo.startAddress = sh.startAddress;
+        return true;
+    }
+
     // TAP file parser
     function explorerParseTAP(data) {
         const blocks = [];
@@ -1039,6 +1053,8 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                     // Bytes: param1 = start address
                     blockInfo.startAddress = param1;
                 }
+            } else if (samTapHeader(blockInfo)) {
+                // a SAM Coupé header (flag 1, 80 bytes)
             } else {
                 // Data block
                 blockInfo.blockType = 'data';
@@ -1105,6 +1121,14 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                                 blockInfo.varsOffset = param2;
                             }
                             if (type === 3) blockInfo.startAddress = param1;
+                        } else if (parseSamTapeHeader(blockData)) {
+                            const sh = parseSamTapeHeader(blockData);
+                            Object.assign(blockInfo, {
+                                headerType: sh.typeName, headerTypeId: sh.typeId, fileName: sh.name,
+                                fileLength: sh.dataLength, sam: sh,
+                            });
+                            if (sh.typeId === 0) { blockInfo.autostart = sh.autostart; blockInfo.varsOffset = sh.varsOffset; }
+                            if (sh.typeId === 3) blockInfo.startAddress = sh.startAddress;
                         } else if (blockData[0] === 0xFF) {
                             blockInfo.dataBlock = true;
                         }
@@ -1149,6 +1173,14 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                                 blockInfo.varsOffset = param2;
                             }
                             if (type === 3) blockInfo.startAddress = param1;
+                        } else if (parseSamTapeHeader(blockData)) {
+                            const sh = parseSamTapeHeader(blockData);
+                            Object.assign(blockInfo, {
+                                headerType: sh.typeName, headerTypeId: sh.typeId, fileName: sh.name,
+                                fileLength: sh.dataLength, sam: sh,
+                            });
+                            if (sh.typeId === 0) { blockInfo.autostart = sh.autostart; blockInfo.varsOffset = sh.varsOffset; }
+                            if (sh.typeId === 3) blockInfo.startAddress = sh.startAddress;
                         } else if (blockData.length > 0 && blockData[0] === 0xFF) {
                             blockInfo.dataBlock = true;
                         }
@@ -4299,7 +4331,7 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                 blockInfo.param2 = p2;
                 if (type === 0) { blockInfo.autostart = p1 < 32768 ? p1 : null; blockInfo.varsOffset = p2; }
                 else if (type === 3) { blockInfo.startAddress = p1; }
-            } else {
+            } else if (!samTapHeader(blockInfo)) {
                 blockInfo.blockType = 'data';
             }
 

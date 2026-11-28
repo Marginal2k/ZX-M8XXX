@@ -31,7 +31,7 @@
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
         import { renderScreen, screenByteAt, screenBase } from '../core/sam/sam-screen.js';
         import { samImage } from '../ui/sam-export.js';
-        import { findRomHooks } from '../core/sam/sam-tape.js';
+        import { findRomHooks, parseSamTapeHeader } from '../core/sam/sam-tape.js';
         import { GifEncoder, createZip } from '../core/gif-zip.js';
         import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
         import { decodeSamBasicProgram } from '../core/sam/sam-basic.js';
@@ -469,6 +469,23 @@
             assert(txt[3] === '40 IF (x) THEN STOP', 'spaces around commands', txt[3]);
             assert(txt[4] === '50 REM hi "', 'REM as written', txt[4]);
             assert(txt[5] === '60 LET b={{9}}' && ls[5].obfuscations[0].actual === 9, 'a hidden number shows its value', txt[5]);
+        }
+
+        section('SAM tape headers');
+        {
+            // as Kaboom!'s: a program at 5CD5, 1151 bytes, its program 532 bytes, LINE 10
+            const hd = (type, name, bytes) => {
+                const b = new Uint8Array(82); b[0] = 1; b[1] = type;
+                [...name.padEnd(15)].forEach((c, k) => { b[2 + k] = c.charCodeAt(0); });
+                for (const [at, v] of Object.entries(bytes)) b[1 + +at] = v;
+                return b;
+            };
+            const p = parseSamTapeHeader(hd(16, 'Kaboom!', { 16: 0, 17: 0x14, 18: 0x82, 31: 0, 32: 0xD5, 33: 0x9C, 34: 0, 35: 0x7F, 36: 0x84, 37: 0, 38: 10, 39: 0 }));
+            assert(p && p.name === 'Kaboom!' && p.typeId === 0, 'a program header', JSON.stringify(p));
+            assert(p.startAddress === 0x5CD5 && p.dataLength === 1151 && p.varsOffset === 532 && p.autostart === 10, 'where, how long, its program, LINE 10');
+            const c = parseSamTapeHeader(hd(19, 'ka0.c', { 31: 0x61, 32: 0xBE, 33: 0xBD, 34: 0, 35: 0x42, 36: 0xBF, 37: 0xFF }));
+            assert(c.typeId === 3 && c.startAddress === 0xBDBE && c.dataLength === 16194 && c.execAddress === null, 'a code header: page 1 offset BDBE is BDBE');
+            assert(parseSamTapeHeader(new Uint8Array(19)) === null && parseSamTapeHeader(hd(3, 'x', {})) === null, "a Spectrum header, or a type that is not the SAM's: none");
         }
 
         section('Done');

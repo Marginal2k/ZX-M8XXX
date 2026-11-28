@@ -3071,6 +3071,7 @@ export function initExplorerViews(xp) {
             if (headerBlock && headerBlock.blockType === 'header' && headerBlock.headerType === 0 && blockIdx + 1 < xp.explorerBlocks.length) {
                 const dataBlock = xp.explorerBlocks[blockIdx + 1];
                 data = dataBlock.data.slice(1, -1);
+                if (headerBlock.sam) basicDecoder = decodeSamBasicProgram;
                 // Trim to program body length (varsOffset) to exclude variables area
                 if (data && headerBlock.varsOffset > 0 && headerBlock.varsOffset < data.length) {
                     data = data.slice(0, headerBlock.varsOffset);
@@ -3083,6 +3084,7 @@ export function initExplorerViews(xp) {
                 const dataBlock = xp.explorerBlocks[blockIdx + 1];
                 if (dataBlock && (dataBlock.id === 0x10 || dataBlock.id === 0x11) && dataBlock.data) {
                     data = dataBlock.data.slice(1, -1);
+                    if (headerBlock.sam) basicDecoder = decodeSamBasicProgram;
                     // Trim to program body length (varsOffset) to exclude variables area
                     if (data && headerBlock.varsOffset > 0 && headerBlock.varsOffset < data.length) {
                         data = data.slice(0, headerBlock.varsOffset);

@@ -91,6 +91,12 @@ function decodeLine(data, deobfuscate) {
         if (b === 0x0D) break;
 
         if (inRem) {
+            if (CONTROL[b]) {
+                const n = b >= 0x16 ? 2 : 1, params = Array.from(data.subarray(i + 1, i + 1 + n));
+                text += `{${CONTROL[b]} ${params.join(',')}}`;
+                tokens.push({ type: 'control', name: CONTROL[b], params });
+                i += 1 + n; continue;
+            }
             if (b >= 0x20 && b < 0x7F) { text += String.fromCharCode(b); tokens.push({ type: 'text', value: String.fromCharCode(b) }); }
             else { text += `[${hx(b)}]`; tokens.push({ type: 'hex', value: hx(b) }); }
             i++; continue;
