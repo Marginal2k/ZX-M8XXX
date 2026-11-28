@@ -185,13 +185,12 @@
             f.write(2, 1); cmd(0x80);
             for (let i = 0; i < 16; i++) f.read(0);
             assert(f.read(0) & 0x04, 'LOST DATA after 16 idle status reads');
-            // index pulse from the rotation
-            let now = 0;
-            const g = new VL1772(() => now, 1000);
+            // index pulse: one status read in 1024 while the motor runs (SimCoupe)
+            const g = new VL1772();
             g.insert(disk); g.write(0, 0x00, 0);
-            now = 2; const a = g.read(0) & 0x02;
-            now = 500; const b = g.read(0) & 0x02;
-            assert(a && !b, 'INDEX at the start of a revolution, not half way round');
+            let pulses = 0;
+            for (let i = 0; i < 4096; i++) if (g.read(0) & 0x02) pulses++;
+            assert(pulses === 4, 'INDEX in one status read of 1024', `${pulses} in 4096`);
         }
 
         // ---------------------------------------------------------------

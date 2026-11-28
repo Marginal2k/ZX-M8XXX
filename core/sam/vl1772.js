@@ -14,8 +14,10 @@
  * with their ID fields and their status (core/sam/sam-disk.js), so a disk in
  * a program's own format (sizes, numbers, CRC errors, deleted data) reads as
  * it was made. A command runs when the host next looks at the status, as in
- * SimCoupe; the index pulse comes from a real rotation (300 rpm) instead of
- * SimCoupe's one-in-1024 status reads.
+ * SimCoupe, and the index pulse is SimCoupe's too: one status read in 1024
+ * while the motor runs. (A pulse in real time, 1.5 ms of each 200 ms turn,
+ * was tried first: SAMDOS's wait for it on Knights-Bridge is shorter than a
+ * turn, and the game then says "Check disk in drive".)
  */
 
 // Status bits
@@ -34,7 +36,7 @@ const CMD_FLAG_SPINUP = 0x08, CMD_FLAG_UPDATE = 0x10, CMD_FLAG_DIR = 0x20, CMD_F
 
 export const MAX_TRACK_SIZE = 6250;
 const MOTOR_TIMEOUT_FRAMES = 100;           // 10 revolutions at 300 rpm: 2 seconds
-const INDEX_PULSE_SHARE = 1.5 / 200;        // 1.5 ms of each 200 ms revolution
+const INDEX_EVERY = 1024;                   // status reads a pulse, as SimCoupe
 
 export const sizeFromCode = (code) => 128 << (code & 3);
 
@@ -190,8 +192,8 @@ export class VL1772 {
     }
 
     _indexPulse() {
-        const p = this.now() % this.rev;
-        return p >= 0 && p < this.rev * INDEX_PULSE_SHARE;
+        this.indexReads = ((this.indexReads || 0) + 1) % INDEX_EVERY;
+        return this.indexReads === 0;
     }
 
     // reg: 0 status, 1 track, 2 sector, 3 data
