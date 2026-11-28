@@ -18,6 +18,7 @@
 
 import { Disassembler } from '../core/disasm.js';
 import { renderScreen, screenByteAt, screenBase, SCR_W, SCR_H } from '../core/sam/sam-screen.js';
+import { createSamAssembler } from './sam-asm.js';
 
 const h2 = (v) => (v & 0xFF).toString(16).toUpperCase().padStart(2, '0');
 const h4 = (v) => (v & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
@@ -53,6 +54,8 @@ const CSS = `
 .sd .bps div { display:flex; gap:6px; align-items:center; }
 .sd .bps .off { color:#585b70; text-decoration:line-through; }
 .sd .note { color:#6c7086; }
+.sd textarea.asrc { width:100%; box-sizing:border-box; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:3px; font:inherit; tab-size:8; resize:vertical; }
+.sd details > summary { cursor:pointer; color:#89b4fa; font-weight:bold; }
 .sd canvas.scr { width:100%; aspect-ratio:512 / 384; image-rendering:pixelated; background:#000; cursor:crosshair; display:block; }
 .sd .dis .lbl { color:#f9e2af; }
 .sd .dis .sym { color:#fab387; }
@@ -124,6 +127,9 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
         <div class="note">double-click an address in the code to name it; names work in every address field</div>
         <div class="lst labels"></div>
       </div>
+      <details class="box"><summary>Assembler <span class="note">(sjasmplus: ORG into the paged-in 64K, or DEVICE ZXSPECTRUM512 for SAM pages)</span></summary>
+        <div class="asm"></div>
+      </details>
       <div class="box"><div class="ttl">Breakpoints</div>
         <div class="bar">
           <select class="bt">
@@ -503,6 +509,11 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
         renderRegs(); renderPaging(); renderScreenBox(); renderCode(); renderMem(); renderStack(); renderCalls(); renderHistory();
         renderLabels(); renderBps();
     }
+
+    createSamAssembler({
+        root: $('.asm'), machine: m, symbols: sym, say,
+        onDone: (what) => { saveLabels(); app.draw(); renderAll(); if (what === 'run') { say(''); app.pause(false); } },
+    });
 
     renderAll();
     return {
