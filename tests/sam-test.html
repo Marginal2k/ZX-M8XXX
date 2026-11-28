@@ -35,6 +35,7 @@
         import { GifEncoder, createZip } from '../core/gif-zip.js';
         import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
         import { decodeSamBasicProgram } from '../core/sam/sam-basic.js';
+        import { proDosImage, listProDosFiles, proDosUsage } from '../core/sam/prodos-fs.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -484,6 +485,33 @@
             assert(cpmHasFile(loadSamDisk(v2), 'LOAD', 'COM') && !cpmHasFile(loadSamDisk(cpm), 'LOAD', 'COM'), 'LOAD.COM in its CP/M directory');
             const sys = makeFileDisk(new Uint8Array(600)).disk || makeFileDisk(new Uint8Array(600));
             assert(!isProDosSystem(sys), 'a SAMDOS disk without procode is not the system disk');
+        }
+
+        section('CP/M: the files on a Pro-DOS disk');
+        {
+            const img = new Uint8Array(737280);
+            [...'SAM Coupe Pro-DOS'].forEach((c, k) => { img[16 + k] = c.charCodeAt(0); });
+            img.fill(0xE5, 0x1200, 0x1200 + 8192);             // an empty directory
+            const entry = (at, name, ext, x, rc, blocks) => {
+                const o = 0x1200 + at * 32;
+                img[o] = 0;
+                [...name.padEnd(8) + ext.padEnd(3)].forEach((c, k) => { img[o + 1 + k] = c.charCodeAt(0); });
+                img.fill(0, o + 12, o + 32);
+                img[o + 12] = x; img[o + 15] = rc;
+                blocks.forEach((b, k) => { img[o + 16 + 2 * k] = b; });
+            };
+            // BIG.DAT: 16K + 256 bytes in two extents, blocks 4-11 then 20
+            entry(0, 'BIG', 'DAT', 1, 2, [20]);                // its second extent first
+            entry(1, 'BIG', 'DAT', 0, 128, [4, 5, 6, 7, 8, 9, 10, 11]);
+            entry(2, 'RUN', 'COM', 0, 1, [12]);
+            for (let b = 4; b <= 20; b++) img.fill(b, 0x1200 + b * 2048, 0x1200 + (b + 1) * 2048);
+            const lin = proDosImage(img), files = listProDosFiles(lin);
+            const big = files.find(f => f.name === 'BIG.DAT'), run = files.find(f => f.name === 'RUN.COM');
+            assert(files.length === 2 && big && run, 'two files, the extents of one put together', files.map(f => f.name).join(','));
+            assert(big.length === 16384 + 256 && big.data[0] === 4 && big.data[16383] === 11 && big.data[16384] === 20, 'extents in order, by their number');
+            assert(run.length === 128 && run.startAddr === 0x100, 'a .COM, one record, at 0100');
+            assert(proDosUsage(lin).used === 4 + 10 && proDosUsage(lin).total === 357, 'blocks used of 357');
+            assert(proDosImage(new Uint8Array(737280)) === null, 'not a Pro-DOS disk: null');
         }
 
         section('SAM tape headers');

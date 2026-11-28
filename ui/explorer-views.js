@@ -1616,6 +1616,32 @@ export function initExplorerViews(xp) {
             return;
         }
 
+        const proDosEntry = e.target.closest('.explorer-file-entry[data-index]');
+        if (proDosEntry && xp.explorerParsed && xp.explorerParsed.type === 'prodos') {
+            const idx = parseInt(proDosEntry.dataset.index);
+            const file = xp.explorerParsed.files[idx];
+            if (!file) return;
+            // a program: its code at 0100; text files and the rest: their bytes
+            if (file.ext === 'COM') {
+                document.querySelector('.explorer-subtab[data-subtab="disasm"]').click();
+                xp.explorerDisasmSource.value = idx.toString();
+                xp.explorerDisasmAddr.value = fmtAddr(0x100);
+                xp.explorerDisasmLen.value = Math.min(file.length, 4096);
+                explorerRenderDisasm();
+            } else if (/^(DIR|TXT|DOC|HLP|ME|1ST|ASM|MAC|Z80|SUB|PAS|C|H|FOR|LST|PRN)$/.test(file.ext)) {
+                document.querySelector('.explorer-subtab[data-subtab="text"]').click();
+                xp.explorerTextSource.value = idx.toString();
+                explorerRenderText();
+            } else {
+                document.querySelector('.explorer-subtab[data-subtab="hexdump"]').click();
+                xp.explorerHexSource.value = idx.toString();
+                xp.explorerHexLen.value = Math.min(file.length, 65536);
+                xp.explorerHexAddr.value = '0000';
+                explorerRenderHexDump();
+            }
+            return;
+        }
+
         const didaktikEntry = e.target.closest('.explorer-file-entry[data-index]');
         if (didaktikEntry && xp.explorerParsed && xp.explorerParsed.type === 'didaktik') {
             const idx = parseInt(didaktikEntry.dataset.index);
@@ -1828,6 +1854,13 @@ export function initExplorerViews(xp) {
                 }
                 hexOpts.push(`<option value="${i}">${displayName} (${file.length} bytes)</option>`);
             }
+        } else if (xp.explorerParsed.type === 'prodos') {
+            // CP/M: a .COM runs at 0100
+            xp.explorerParsed.files.forEach((file, i) => {
+                const displayName = escapeHtml(`${file.user ? file.user + ':' : ''}${file.name} [${file.typeName}]`);
+                disasmOpts.push(`<option value="${i}">${displayName}${file.startAddr ? ' @ ' + fmtAddr(file.startAddr) : ''} (${file.length} bytes)</option>`);
+                hexOpts.push(`<option value="${i}">${displayName} (${file.length} bytes)</option>`);
+            });
         } else if (xp.explorerParsed.type === 'didaktik') {
             // MDOS type chars: P=BASIC, B=Code, N/C=arrays, S=snap, Q=seq
             const files = xp.explorerParsed.files;
@@ -1969,6 +2002,9 @@ export function initExplorerViews(xp) {
                     xp.explorerDisasmAddr.value = fmtAddr(file.startAddress);
                 }
             }
+        } else if (xp.explorerParsed.type === 'prodos') {
+            const file = xp.explorerParsed.files[parseInt(source)];
+            if (file) xp.explorerDisasmAddr.value = fmtAddr(file.startAddr || 0);
         } else if (xp.explorerParsed.type === 'opd' || xp.explorerParsed.type === 'didaktik') {
             if (source.startsWith('basic:')) {
                 xp.explorerDisasmAddr.value = '5CCB';
@@ -2137,6 +2173,13 @@ export function initExplorerViews(xp) {
                     baseAddr = file.startAddr || 0;
                     xp.explorerDisasmAddr.value = fmtAddr(baseAddr);
                 }
+            }
+        } else if (source && xp.explorerParsed.type === 'prodos') {
+            const file = xp.explorerParsed.files[parseInt(source)];
+            if (file) {
+                data = file.data;
+                baseAddr = file.startAddr || 0;
+                xp.explorerDisasmAddr.value = fmtAddr(baseAddr);
             }
         } else if (source && xp.explorerParsed.type === 'didaktik') {
             const fileIdx = parseInt(source.startsWith('basic:') ? source.slice(6) : source);
@@ -2594,6 +2637,9 @@ export function initExplorerViews(xp) {
                 if (xp.explorerParsed.type === 'mdr' && data && data.length > 9 && !file.isPrint) data = data.slice(9);
                 baseAddr = 0;
             }
+        } else if (source && xp.explorerParsed.type === 'prodos') {
+            const file = xp.explorerParsed.files[parseInt(source)];
+            if (file) { data = file.data; baseAddr = 0; }
         } else if (source && (xp.explorerParsed.type === 'opd' || xp.explorerParsed.type === 'didaktik')) {
             const fileIdx = parseInt(source);
             const file = xp.explorerParsed.files[fileIdx];
@@ -2834,6 +2880,12 @@ export function initExplorerViews(xp) {
                     : xp.explorerData.slice(file.offset, file.offset + file.sectors * 256);
                 if (xp.explorerParsed.type === 'mdr' && result && result.length > 9 && !file.isPrint) result = result.slice(9);
                 return result;
+            }
+        } else if (source && xp.explorerParsed.type === 'prodos') {
+            const file = xp.explorerParsed.files[parseInt(source)];
+            if (file) {
+                const eof = file.data.indexOf(0x1A);          // CP/M fills a text's last record with ^Z
+                return eof >= 0 ? file.data.subarray(0, eof) : file.data;
             }
         } else if (source && (xp.explorerParsed.type === 'opd' || xp.explorerParsed.type === 'didaktik')) {
             const fileIdx = parseInt(source);

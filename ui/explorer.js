@@ -17,6 +17,7 @@ import { HcDiskLoader } from '../core/loaders/disk-hc.js';
 import { KdosLoader } from '../core/loaders/disk-kdos.js';
 import { BASIC_TOKENS, decodeBasicProgram } from '../core/basic-tokens.js';
 import { parseSamTapeHeader } from '../core/sam/sam-tape.js';
+import { proDosImage, listProDosFiles, proDosUsage } from '../core/sam/prodos-fs.js';
 import { findPackedScreenInBlock, rcsToScr, looksRcsEncoded } from '../core/depackers.js';
 import { trdBasicAutostartLine, extractTrdFileDescriptor, shapeBasicEntry, addMetaFromDescriptor, isMonoloader, splitMonoloader } from './disk-file-copy.js';
 import { initExplorerBanks } from './explorer-banks.js';
@@ -797,6 +798,8 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                 if (hc) { explorerData = hc.dsk; explorerPendingHcRaw = hc.hcRaw; ext = 'dsk'; }
             }
             explorerFileType = (ext === 'img' && isMgtSize) ? 'mgt' : ext;
+            // a SAM Coupé Pro-DOS (CP/M) disk, whatever its extension
+            if (['cpm', 'dsk', 'mgt', 'img'].includes(ext) && proDosImage(explorerData)) explorerFileType = 'prodos';
 
             // Parse file
             await explorerParseFile(file.name, ext);
@@ -845,6 +848,7 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
         const targetPanel = getActivePanel();
         targetPanel.selection.clear();
         targetPanel.expandedBlock = -1;
+        if (explorerFileType === 'prodos') ext = 'prodos';
 
         switch (ext) {
             case 'tap':
@@ -883,6 +887,9 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                 break;
             case 'opd':
                 explorerParsed = explorerParseOPD(explorerData);
+                break;
+            case 'prodos':
+                explorerParsed = explorerParseProDos(explorerData);
                 break;
             case 'd40':
             case 'd80':
@@ -1785,6 +1792,14 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
         };
     }
 
+    // SAM Coupé Pro-DOS (CP/M) disk: its files read out whole
+    function explorerParseProDos(data) {
+        const lin = proDosImage(data);
+        const files = listProDosFiles(lin);
+        explorerBlocks = files;
+        return { type: 'prodos', files, usage: proDosUsage(lin), size: data.length };
+    }
+
     // MDR cartridge image parser
     function explorerParseMDR(data) {
         const files = MDRLoader.listFiles(data);
@@ -1940,7 +1955,7 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
             explorerZipFiles = files;
 
             // Auto-drill into ZIP if it contains exactly one supported file
-            const supportedExts = ['tap', 'tzx', 'sna', 'z80', 'szx', 'rzx', 'trd', 'scl', 'udi', 'mgt', 'img', 'mdr', 'opd', 'opu', 'd40', 'd80', 'dsk', 'kdi'];
+            const supportedExts = ['tap', 'tzx', 'sna', 'z80', 'szx', 'rzx', 'trd', 'scl', 'udi', 'mgt', 'img', 'mdr', 'opd', 'opu', 'd40', 'd80', 'dsk', 'kdi', 'cpm'];
             const supportedFiles = files.filter(f => {
                 const ext = f.name.split('.').pop().toLowerCase();
                 if (ext === 'img') return f.data && (f.data.length === 819200 || f.data.length === 409600 ||
@@ -1978,6 +1993,11 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                         explorerFileType = 'dsk';
                         return explorerParseDSK(explorerData);
                     }
+                }
+
+                if (['cpm', 'dsk', 'mgt', 'img'].includes(ext) && proDosImage(explorerData)) {
+                    explorerFileType = 'prodos';
+                    return explorerParseProDos(explorerData);
                 }
 
                 // Parse based on type
@@ -2094,6 +2114,9 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                 break;
             case 'opd':
                 html = explorerRenderOPDInfo();
+                break;
+            case 'prodos':
+                html = explorerRenderProDosInfo();
                 break;
             case 'didaktik':
                 html = explorerRenderDidaktikInfo();
@@ -2267,6 +2290,7 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
                 return (!file.isPrint && fd && fd.length > 9) ? fd.slice(9) : fd;
             }
             if (type === 'trd' || type === 'scl') return explorerData.slice(file.offset, file.offset + file.length);
+            if (type === 'prodos') return file.data;
             if (type === 'opd' || type === 'didaktik') {
                 const raw = type === 'opd' ? OPDLoader.extractFile(explorerData, file) : DidaktikLoader.extractFile(explorerData, file);
                 if (!raw) return null;
@@ -2701,6 +2725,7 @@ export function initExplorer({ DSKLoader, Disassembler, SZXLoader, RZXLoader, Zi
         explorerRenderMDRInfo,
         explorerRenderMGTInfo,
         explorerRenderOPDInfo,
+        explorerRenderProDosInfo,
         explorerRenderRZXInfo,
         explorerRenderSCLInfo,
         explorerRenderSNAInfo,

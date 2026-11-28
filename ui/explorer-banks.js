@@ -1233,6 +1233,41 @@ export function initExplorerBanks(ctx) {
         return html;
     }
 
+    // A Pro-DOS (CP/M) disk of the SAM Coupé: core/sam/prodos-fs.js
+    function explorerRenderProDosInfo() {
+        const p = ctx.explorerParsed, u = p.usage;
+        let html = `<div class="explorer-info-section">
+            <div class="explorer-info-header">Pro-DOS Disk (SAM Coupé CP/M)</div>
+            <table class="explorer-info-table">
+                <tr><th>Size</th><td>${ctx.explorerData.length} bytes</td></tr>
+                <tr><th>Geometry</th><td>80T × 2S × 9sec × 512B, track 0 side 0 Pro-DOS's</td></tr>
+                <tr><th>Blocks</th><td>${u.total} × ${u.blockSize / 1024}K, directory in 4</td></tr>
+                <tr><th>Files</th><td>${p.files.length}</td></tr>
+                <tr><th>Used</th><td>${u.used * u.blockSize / 1024}K</td></tr>
+                <tr><th>Free</th><td>${(u.total - u.used) * u.blockSize / 1024}K</td></tr>
+            </table>
+        </div>`;
+        html += '<div class="explorer-info-section"><div class="explorer-info-header">Files</div>';
+        if (!p.files.length) html += '<span class="dim">No files on disk.</span>';
+        else {
+            html += '<div class="explorer-file-list">';
+            p.files.forEach((f, i) => {
+                const flags = (f.readOnly ? 'R/O ' : '') + (f.system ? 'SYS' : '');
+                html += `<div class="explorer-file-entry" data-index="${i}">
+                    <span class="explorer-file-num">${i + 1}</span>
+                    <span class="explorer-file-type">${escapeHtml(f.typeName)}</span>
+                    <span class="explorer-file-name">${f.user ? f.user + ':' : ''}${escapeHtml(f.name)}</span>
+                    <span class="explorer-file-size">${f.length}</span>
+                    <span class="explorer-file-addr">${f.startAddr ? fmtAddrPair(f.startAddr) : ''}</span>
+                    <span class="explorer-file-preview"></span>
+                    <span class="explorer-file-sectors">${flags}</span>
+                </div>`;
+            });
+            html += '</div>';
+        }
+        return html + '</div>';
+    }
+
     function explorerRenderOPDInfo() {
         const info = ctx.explorerParsed.info;
         let html = `<div class="explorer-info-section">
@@ -1757,6 +1792,7 @@ export function initExplorerBanks(ctx) {
         explorerRenderMDRInfo,
         explorerRenderMGTInfo,
         explorerRenderOPDInfo,
+        explorerRenderProDosInfo,
         explorerRenderRZXInfo,
         explorerRenderSCLInfo,
         explorerRenderSNAInfo,
