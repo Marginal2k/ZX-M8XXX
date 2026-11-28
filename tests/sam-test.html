@@ -28,6 +28,7 @@
         import { SamDisk, loadSamDisk, hasDos, makeFileDisk, MGT_SIZE } from '../core/sam/sam-disk.js';
         import { VL1772, crcBlock, RECORD_NOT_FOUND, CRC_ERROR, DRQ, BUSY } from '../core/sam/vl1772.js';
         import { isSamRelease } from '../ui/sam-player.js';
+        import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -214,6 +215,53 @@
             assert(isSamRelease({ url: '/file/1/game.sad' }) && isSamRelease({ fileName: 'x.SAD.gz' }), 'a .sad');
             assert(!isSamRelease({ url: '/file/1/game.mgt' }), 'an .mgt alone stays a +D disk');
             assert(!isSamRelease({ hardware: ['pentagon128', 'saa'], url: 'a.trd' }), 'a Spectrum release with an SAA stays a Spectrum');
+        }
+
+        // ---------------------------------------------------------------
+        section('Symbols');
+        {
+            const l = parseLabels(['; c', 'start: EQU 0x8000', 'loop equ #8010', '9000=table', '$A000 sprites',
+                                   'foo = 1234h', 'not a label'].join('\n'));
+            const got = Object.fromEntries(l.map(x => [x.name, x.addr]));
+            assert(got.start === 0x8000 && got.loop === 0x8010 && got.table === 0x9000 && got.sprites === 0xA000 && got.foo === 0x1234,
+                   'labels: sjasmplus EQU, # and 0x, SimCoupe map, "ADDR NAME", h suffix', JSON.stringify(got));
+            const sy = await loadSamSymbols('../data/sam/');
+            const m = new SamCoupe();                                // LMPR 0: ROM0 in A, RAM page 0 in... page 1 in B
+            assert(sy.nameAt(m, 0x0038) === 'INT' && sy.lookup('error').addr === 0x0008, 'ROM0: 0038 is INT, ERROR is 0008');
+            m.portOut(0x00FA, 0x20 | 31);                            // RAM 31 in A, page 0 in B: the system variables
+            assert(sy.nameAt(m, 0x5B70) === 'ANYIV', 'system variable 5B70 is ANYIV while page 0 is at 4000');
+            assert(sy.nameAt(m, 0x0038) === null, 'and 0038 has no ROM name with RAM there');
+            m.portOut(0x00FA, 0x40);
+            const r1 = Math.min(...[...sy.rom.keys()].filter(k => k >= 0xC000));
+            assert(sy.nameAt(m, r1) === sy.rom.get(r1) && sy.nameAt(m, r1), `ROM1 names (${r1.toString(16)}) with ROM1 paged at C000`);
+            assert(sy.portName(0xF9, false) === 'STATUS' && sy.portName(0xF9, true) === 'LINE', 'port F9: STATUS in, LINE out');
+            sy.setLabel(0x8000, 'mystart');
+            m.portOut(0x00FA, 0x00); m.portOut(0x00FB, 2);
+            assert(sy.nameAt(m, 0x8000) === 'mystart' && sy.lookup('MYSTART').addr === 0x8000, 'a label of the user, in any case');
+            sy.setLabel(0x8000, 'p5only', 5);
+            assert(sy.nameAt(m, 0x8000) === 'mystart', 'a page-5 label does not name page 2');
+            m.portOut(0x00FB, 5);
+            assert(sy.nameAt(m, 0x8000) === 'p5only', 'and names page 5');
+            assert(sy.resolveSpec('R0:ERROR') === 'R0:8' && sy.resolveSpec('mystart-8010') === '8000-8010', 'names in a breakpoint spec');
+            sy.setLabel(0x8000, '');
+            assert(!sy.lookup('mystart'), 'a label taken away');
+        }
+
+        // ---------------------------------------------------------------
+        section('History and calls');
+        {
+            const m = new SamCoupe();
+            m.portOut(0x00FA, 0x20 | 1);                             // RAM everywhere
+            // 8000: CALL 8010; HALT    8010: NOP; RET
+            [0xCD, 0x10, 0x80, 0x76].forEach((b, i) => m.write(0x8000 + i, b));
+            [0x00, 0xC9].forEach((b, i) => m.write(0x8010 + i, b));
+            m.cpu.pc = 0x8000; m.cpu.sp = 0xC000; m.cpu.iff1 = false;
+            m.tracking = true;
+            m._step();
+            assert(m.callStack.length === 1 && m.callStack[0].from === 0x8000 && m.callStack[0].to === 0x8010, 'CALL: on the call stack');
+            m._step(); m._step();
+            assert(m.callStack.length === 0 && m.cpu.pc === 0x8003, 'RET: off it');
+            assert(m.getHistory(3).join(',') === [0x8000, 0x8010, 0x8011].join(','), 'history: the three, oldest first');
         }
 
         // ---------------------------------------------------------------

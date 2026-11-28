@@ -5,10 +5,12 @@
 // (core/debug-triggers.js, mixed into SamCoupe). The machine stops itself:
 // runFrame() returns the trigger that stopped it, and the page pauses.
 //
-//   createSamDebugger({ root, machine, app })
+//   createSamDebugger({ root, machine, app, symbols })
 //     root     the element to build the panel in
 //     machine  the SamCoupe
 //     app      { pause(bool), isPaused(), draw() } from ui/sam-app.js
+//     symbols  a SamSymbols (core/sam/sam-symbols.js): the ROM's, SAMDOS's
+//              and the ports' names, and the user's own labels
 //
 // Shortcuts while the machine is paused: F5 run, F7 step into, F8 step over,
 // Shift+F8 run to RET, F6 run to the cursor line. (While it runs the keys
@@ -50,9 +52,28 @@ const CSS = `
 .sd .bps div { display:flex; gap:6px; align-items:center; }
 .sd .bps .off { color:#585b70; text-decoration:line-through; }
 .sd .note { color:#6c7086; }
+.sd .dis .lbl { color:#f9e2af; }
+.sd .dis .sym { color:#fab387; }
+.sd .lst div { white-space:pre; cursor:pointer; }
+.sd .lst div:hover { background:#313244; }
+.sd .lst .int { color:#cba6f7; }
+.sd .cols { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 `;
 
-export function createSamDebugger({ root, machine: m, app }) {
+export function createSamDebugger({ root, machine: m, app, symbols = null }) {
+    const sym = symbols;
+    const LABELS_KEY = 'zxm8-sam-labels';
+    if (sym) { try { sym.fromJSON(JSON.parse(localStorage.getItem(LABELS_KEY) || '[]')); } catch (e) { /* none kept */ } }
+    const saveLabels = () => { if (sym) { try { localStorage.setItem(LABELS_KEY, JSON.stringify(sym.toJSON())); } catch (e) { /* not kept */ } } };
+    m.tracking = true;                         // history and calls from now on
+    const nameAt = (a, ctx) => (sym ? sym.nameAt(m, a, ctx) : null);
+    // an address typed in: hex, or a name
+    const parseAddr = (txt) => {
+        const t = String(txt).trim();
+        if (sym) { const v = sym.lookup(t); if (v) return v.addr; }
+        const v = parseInt(t, 16);
+        return isNaN(v) ? null : v & 0xFFFF;
+    };
     if (!document.getElementById('sd-css')) {
         const st = document.createElement('style'); st.id = 'sd-css'; st.textContent = CSS; document.head.appendChild(st);
     }
@@ -77,7 +98,19 @@ export function createSamDebugger({ root, machine: m, app }) {
       <div class="box"><div class="ttl">Paging</div><div class="pg"></div></div>
       <div class="box"><div class="ttl">Code <input class="dgo" size="10" placeholder="addr"> <label><input type="checkbox" class="follow" checked> follow PC</label></div><div class="dis"></div></div>
       <div class="box"><div class="ttl">Memory <input class="mgo" size="10" placeholder="addr"></div><div class="mem"></div></div>
-      <div class="box"><div class="ttl">Stack</div><div class="stk"></div></div>
+      <div class="cols">
+        <div class="box"><div class="ttl">Stack</div><div class="stk"></div></div>
+        <div class="box"><div class="ttl">Calls</div><div class="lst calls"></div></div>
+      </div>
+      <div class="box"><div class="ttl">History <span class="note">(last executed, newest last)</span></div><div class="lst hist"></div></div>
+      <div class="box"><div class="ttl">Labels
+          <label class="btnlike"><button data-a="lload">Load…</button></label>
+          <button data-a="lsave">Save</button>
+          <input type="file" class="lfile" hidden accept=".map,.sym,.lbl,.txt,.lst,.asm">
+        </div>
+        <div class="note">double-click an address in the code to name it; names work in every address field</div>
+        <div class="lst labels"></div>
+      </div>
       <div class="box"><div class="ttl">Breakpoints</div>
         <div class="bar">
           <select class="bt">
@@ -89,7 +122,7 @@ export function createSamDebugger({ root, machine: m, app }) {
           <input class="bc" size="12" placeholder="condition">
           <button data-a="add">Add</button>
         </div>
-        <div class="note">page: 0-31 RAM, R0 / R1 ROM. condition: A==0, HL>4000, (HL)==FF, NZ…</div>
+        <div class="note">page: 0-31 RAM, R0 / R1 ROM; a name for the address. condition: A==0, HL>4000, (HL)==FF, NZ…</div>
         <div class="bps"></div>
       </div>`;
     const $ = (s) => root.querySelector(s);
@@ -148,14 +181,46 @@ export function createSamDebugger({ root, machine: m, app }) {
         let top = follow || disTop === null ? dis.findStartForPosition(pc, 6, LINES) : disTop;
         if (!follow && disTop === null) disTop = top;
         const lines = dis.disassembleRange(top, LINES);
-        $('.dis').innerHTML = lines.map((l) => {
+        let rows = 0;
+        const html = [];
+        for (const l of lines) {
+            if (rows >= LINES) break;
+            const own = nameAt(l.addr, l.addr);
+            if (own) { html.push(`<div class="lbl" data-addr="${l.addr}">${esc(own)}:</div>`); rows++; }
             const bp = m.hasBreakpoint ? m.hasBreakpoint(l.addr) : false;
             const cls = [l.addr === pc ? 'pc' : '', l.addr === cursor ? 'cur' : ''].join(' ');
             const bytes = l.bytes.map(h2).join(' ').padEnd(12);
-            return `<div class="${cls}" data-addr="${l.addr}"><span class="g" data-bp="${l.addr}">${bp ? '●' : ''}</span>` +
-                `<span class="a">${h4(l.addr)}</span>  <span class="b">${bytes}</span> ${esc(l.mnemonic)}</div>`;
-        }).join('');
+            html.push(`<div class="${cls}" data-addr="${l.addr}"><span class="g" data-bp="${l.addr}">${bp ? '●' : ''}</span>` +
+                `<span class="a" data-lbl="${l.addr}">${h4(l.addr)}</span>  <span class="b">${bytes}</span> ${operands(l)}</div>`);
+            rows++;
+        }
+        $('.dis').innerHTML = html.join('');
     }
+    // names in an instruction: a 16-bit operand that has one, and the port of IN / OUT
+    function operands(l) {
+        let t = esc(l.mnemonic);
+        if (!sym) return t;
+        t = t.replace(/\b([0-9A-F]{4})h\b/g, (w, x) => {
+            const n = nameAt(parseInt(x, 16), l.addr);
+            return n ? `<span class="sym" title="${w}">${esc(n)}</span>` : w;
+        });
+        if (/^(IN|OUT)\b/.test(l.mnemonic)) {
+            t = t.replace(/\(([0-9A-F]{2})h\)/, (w, x) => {
+                const n = sym.portName(parseInt(x, 16), l.mnemonic.startsWith('OUT'));
+                return n ? `(<span class="sym" title="${x}h">${esc(n)}</span>)` : w;
+            });
+        }
+        return t;
+    }
+    $('.dis').addEventListener('dblclick', (e) => {
+        const a = e.target.dataset.lbl;
+        if (a === undefined || !sym) return;
+        const addr = +a;
+        editInline(e.target, sym.nameAt(m, addr) || '', (name) => {
+            sym.setLabel(addr, name.trim().replace(/\s+/g, '_'));
+            saveLabels();
+        });
+    });
     $('.dis').addEventListener('click', (e) => {
         const g = e.target.closest('[data-bp]');
         if (g) { m.toggleBreakpoint(+g.dataset.bp); renderAll(); return; }
@@ -171,8 +236,9 @@ export function createSamDebugger({ root, machine: m, app }) {
     }, { passive: false });
     $('.dgo').addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
-        const v = parseInt(e.target.value, 16);
-        if (!isNaN(v)) { $('.follow').checked = false; disTop = v & 0xFFFF; renderCode(); }
+        const v = parseAddr(e.target.value);
+        if (v === null) { say(`no such address or name: ${e.target.value}`); return; }
+        $('.follow').checked = false; disTop = v; renderCode();
     });
     $('.follow').addEventListener('change', () => { disTop = null; renderCode(); });
 
@@ -206,8 +272,9 @@ export function createSamDebugger({ root, machine: m, app }) {
     }, { passive: false });
     $('.mgo').addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
-        const v = parseInt(e.target.value, 16);
-        if (!isNaN(v)) { memAddr = v & 0xFFF8; renderMem(); }
+        const v = parseAddr(e.target.value);
+        if (v === null) { say(`no such address or name: ${e.target.value}`); return; }
+        memAddr = v & 0xFFF8; renderMem();
     });
 
     // ---- stack ----
@@ -215,10 +282,54 @@ export function createSamDebugger({ root, machine: m, app }) {
         const sp = m.cpu.sp, out = [];
         for (let i = 0; i < 8; i++) {
             const a = (sp + i * 2) & 0xFFFF;
-            out.push(`${h4(a)}: ${h4(peek(a) | (peek(a + 1) << 8))}`);
+            const w = peek(a) | (peek(a + 1) << 8);
+            const n = nameAt(w, w);
+            out.push(`${h4(a)}: ${h4(w)}${n ? ' ' + esc(n) : ''}`);
         }
         $('.stk').innerHTML = out.join('<br>');
     }
+
+    // ---- calls, history, labels ----
+    const where = (a) => { const n = nameAt(a, a); return h4(a) + (n ? ' ' + esc(n) : ''); };
+    function renderCalls() {
+        const cs = m.callStack.slice().reverse();
+        $('.calls').innerHTML = cs.length ? cs.slice(0, 12).map((c) =>
+            `<div class="${c.int ? 'int' : ''}" data-go="${c.to}" title="from ${h4(c.from)}">${c.int ? 'INT ' : ''}${where(c.to)}</div>`).join('')
+            : '<span class="note">none</span>';
+    }
+    function renderHistory() {
+        const h = m.getHistory(16);
+        $('.hist').innerHTML = h.length ? h.map((a) => {
+            const l = dis.disassemble(a);
+            return `<div data-go="${a}">${where(a).padEnd(18)} ${operands(l)}</div>`;
+        }).join('') : '<span class="note">nothing yet: run or step</span>';
+    }
+    function renderLabels() {
+        if (!sym) { $('.labels').innerHTML = '<span class="note">no symbols</span>'; return; }
+        const list = sym.userLabels();
+        $('.labels').innerHTML = list.length ? list.slice(0, 200).map((l) =>
+            `<div data-go="${l.addr}">${h4(l.addr)}${l.page !== null ? ' (' + esc(l.page) + ')' : ''} ${esc(l.name)} <button data-unlabel="${l.addr}" data-page="${l.page ?? ''}">✕</button></div>`).join('')
+            : '<span class="note">none of your own yet (the ROM\'s and SAMDOS\'s are built in)</span>';
+    }
+    root.addEventListener('click', (e) => {
+        const un = e.target.dataset.unlabel;
+        if (un !== undefined) {
+            const pg = e.target.dataset.page;
+            sym.setLabel(+un, '', pg === '' ? null : (isNaN(+pg) ? pg : +pg));
+            saveLabels(); renderAll(); return;
+        }
+        const go = e.target.closest('[data-go]');
+        if (go && root.contains(go)) { $('.follow').checked = false; disTop = +go.dataset.go; cursor = +go.dataset.go; renderCode(); }
+    });
+    $('.lfile').addEventListener('change', async () => {
+        const f = $('.lfile').files[0];
+        if (!f || !sym) return;
+        const n = sym.loadUserLabels(await f.text());
+        saveLabels();
+        say(`${n} labels from ${f.name}`);
+        $('.lfile').value = '';
+        renderAll();
+    });
 
     // ---- breakpoints ----
     function renderBps() {
@@ -241,8 +352,8 @@ export function createSamDebugger({ root, machine: m, app }) {
             if (!p) { say(`not a port: ${spec}`); return; }
             t = { type, start: p.port, end: p.port, mask: p.mask, condition: cond };
         } else {
-            const a = m.parseAddressSpec(spec);
-            if (!a) { say(`not an address: ${spec} (page 0-31 or R0 / R1)`); return; }
+            const a = m.parseAddressSpec(sym ? sym.resolveSpec(spec) : spec);
+            if (!a) { say(`not an address: ${spec} (page 0-31 or R0 / R1, or a name)`); return; }
             t = { type, start: a.start, end: a.end, page: a.page, condition: cond };
         }
         if (m.addTrigger(t) < 0) say('that one is there already');
@@ -263,7 +374,8 @@ export function createSamDebugger({ root, machine: m, app }) {
     function after(r) {
         app.draw();
         const text = describe(r);
-        say(text || (app.isPaused() ? 'paused' : ''));
+        const n = nameAt(m.cpu.pc, m.cpu.pc);
+        say((text || (app.isPaused() ? 'paused' : '')) + (n && app.isPaused() ? ` · PC in ${n}` : ''));
         renderAll();
     }
     const act = {
@@ -275,6 +387,15 @@ export function createSamDebugger({ root, machine: m, app }) {
         int: () => { app.pause(true); after(m.runToInterrupt()); },
         cursor: () => { if (cursor === null) { say('pick a line in the code first'); return; } app.pause(true); after(m.runToAddress(cursor)); },
         add: addBreakpoint,
+        lload: () => $('.lfile').click(),
+        lsave: () => {
+            if (!sym) return;
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([sym.exportMap()], { type: 'text/plain' }));
+            a.download = 'labels.map';
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        },
     };
     root.addEventListener('click', (e) => { const a = e.target.dataset.a; if (a && act[a]) act[a](); });
     $('.bs').addEventListener('keydown', (e) => { if (e.key === 'Enter') addBreakpoint(); });
@@ -297,7 +418,8 @@ export function createSamDebugger({ root, machine: m, app }) {
     }
 
     function renderAll() {
-        renderRegs(); renderPaging(); renderCode(); renderMem(); renderStack(); renderBps();
+        renderRegs(); renderPaging(); renderCode(); renderMem(); renderStack(); renderCalls(); renderHistory();
+        renderLabels(); renderBps();
     }
 
     renderAll();

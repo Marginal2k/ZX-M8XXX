@@ -140,6 +140,14 @@ export class SamCoupe {
         this._portWatch = false;
         this._skipBreakAt = -1;                // the PC a break left off at: run past it once
         this.onBreak = null;
+        // what the debugger looks back on, while `tracking` is on (the panel
+        // turns it on): the last 256 instructions' addresses, and the calls
+        // (CALL, RST, an interrupt) not yet returned from
+        this.tracking = false;
+        this.history = new Uint16Array(256);
+        this.histPos = 0;
+        this.histCount = 0;
+        this.callStack = [];
         this.cpu.portRead = (port) => this.portIn(port);
         this.cpu.portWrite = (port, val) => this.portOut(port, val);
         this.mouse = { dx: 0, dy: 0, buttons: 0, pos: 0, last: 0, buf: new Uint8Array(9) };
@@ -164,6 +172,7 @@ export class SamCoupe {
     reset() {
         this.lmpr = 0; this.hmpr = 0; this.vmpr = 0; this.lepr = 0; this.hepr = 0;
         this._restoreDos();
+        if (this.callStack) { this.callStack.length = 0; this.histCount = 0; }
         this.border = 0; this.lineInt = 0xFF;
         this.clut.fill(0);
         this.beeper = 0;
@@ -344,10 +353,12 @@ export class SamCoupe {
         const cpu = this.cpu;
         this._intTaken = false;
         const sec = cpu.pc >> 14;
-        this._lastOp = this.secBuf[sec][this.secOff[sec] + (cpu.pc & 0x3FFF)];
+        const op = this._lastOp = this.secBuf[sec][this.secOff[sec] + (cpu.pc & 0x3FFF)];
+        const pc0 = cpu.pc, sp0 = cpu.sp;
         if (cpu.iff1 && this._status(cpu.tStates) !== 0x1F) {
             cpu.tStates += cpu.interrupt();
             this._intTaken = true;
+            if (this.tracking) this._pushCall(pc0, true);
         } else if (cpu.halted) {
             if (cpu.eiPending) { cpu.eiPending = false; cpu.iff1 = cpu.iff2 = true; }
             cpu.tStates += 4;
@@ -358,9 +369,37 @@ export class SamCoupe {
             this._inCpuExecution = true;
             cpu.execute();
             this._inCpuExecution = false;
+            if (this.tracking) this._track(pc0, sp0, op);
         }
         if (cpu.tStates >= T_FRAME) { this._endFrame(); return true; }
         return false;
+    }
+
+    // ---- history and calls, for the debugger ----
+    _track(pc0, sp0, op) {
+        this.history[this.histPos] = pc0;
+        this.histPos = (this.histPos + 1) & 255;
+        if (this.histCount < 256) this.histCount++;
+        const sp = this.cpu.sp;
+        const isCall = op === 0xCD || (op & 0xC7) === 0xC4 || (op & 0xC7) === 0xC7;
+        if (isCall && sp === ((sp0 - 2) & 0xFFFF)) this._pushCall(pc0, false);
+        else if ((op === 0xC9 || (op & 0xC7) === 0xC0 || op === 0xED) && sp === ((sp0 + 2) & 0xFFFF)) {
+            while (this.callStack.length && this.callStack[this.callStack.length - 1].sp < sp) this.callStack.pop();
+        }
+    }
+
+    _pushCall(from, isInt) {
+        const cs = this.callStack;
+        cs.push({ from, to: this.cpu.pc, sp: this.cpu.sp, int: isInt });
+        if (cs.length > 64) cs.shift();
+    }
+
+    // The last n instruction addresses, oldest first
+    getHistory(n = 32) {
+        const out = [];
+        const k = Math.min(n, this.histCount);
+        for (let i = k; i > 0; i--) out.push(this.history[(this.histPos - i) & 255]);
+        return out;
     }
 
     _endFrame() {

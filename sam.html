@@ -48,12 +48,14 @@
     <script type="module">
         import { createSamApp } from './ui/sam-app.js';
         import { createSamDebugger } from './ui/sam-debug.js';
+        import { loadSamSymbols } from './core/sam/sam-symbols.js';
+        const symbols = await loadSamSymbols('data/sam/');
         const q = new URLSearchParams(location.search);
         const panel = document.getElementById('debug');
         let dbg = null;
         const openDebugger = () => {
             panel.classList.remove('hidden');
-            if (!dbg) dbg = createSamDebugger({ root: panel, machine: window.samApp.machine, app: window.samApp });
+            if (!dbg) dbg = createSamDebugger({ root: panel, machine: window.samApp.machine, app: window.samApp, symbols });
             dbg.refresh();
         };
         window.samApp = await createSamApp({
