@@ -202,7 +202,7 @@ full screen), the same methods and messages. An `.mgt` with no codes stays a
   the pointer, Esc lets it go.
 - Phones and tablets: the on-screen joystick plays SAM joystick 1 (keys
   6-0, as SimCoupe wires it), joystick 2 (keys 1-5) or a Kempston on port
-  31 (`kempston` in the hardware list picks it); the ⌨ button opens a SAM
+  31, active low as SimCoupe has it (`kempston` in the hardware list picks it); the ⌨ button opens a SAM
   keyboard (ui/sam-vkbd.js: F0-F9, ESC, TAB, CAPS, EDIT, INV, CNTRL, the
   cursor keys; SHIFT, SYMBOL and CNTRL stick for the next key).
 

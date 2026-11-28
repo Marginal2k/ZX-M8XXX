@@ -123,9 +123,9 @@
             m.cpu.tStates = (TOP + 50) * T_LINE + 10;
             assert(m.portIn(0x01F8) === 50, 'HPEN gives the screen line');
             m.kempston = 0x10;
-            assert(m.portIn(0x001F) === 0x10, 'Kempston on port 31: fire (bit 4)');
+            assert(m.portIn(0x001F) === 0xEF, 'Kempston on port 31, active low as SimCoupe has it: fire clears bit 4');
             m.kempston = 0;
-            assert(m.portIn(0x001F) === 0, 'and nothing pressed');
+            assert(m.portIn(0x001F) === 0xFF, 'and nothing pressed reads FF');
         }
 
         // ---------------------------------------------------------------
