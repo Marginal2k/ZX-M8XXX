@@ -248,6 +248,57 @@ export function hasDos(disk) {
     return !!s && s.length > 260 && [0x42, 0x4F, 0x4F, 0x54].every((c, i) => (s[256 + i] & 0x5F) === c);
 }
 
+// ---- Pro-DOS: CP/M 2.2 for the SAM (Chris Pile, Digital Reality 1991) ----
+// It boots from a SAMDOS disk with its code on it ("procode" for 1.9,
+// "Pro-DOS-v2" for 2), then works with Pro-DOS disks: CP/M disks of
+// 80 x 2 x 9 sectors whose first sector says "SAM Coupe Pro-Dos." or
+// "SAM Coupe Pro-DOS" (the FDOS library disks, games released as .cpm).
+const text = (b, from, to) => String.fromCharCode(...b.subarray(from, to));
+
+export function isProDosDisk(disk) {
+    const s = disk.sectorById(0, 0, 1);
+    return !!s && s.length >= 34 && text(s, 16, 33).toLowerCase() === 'sam coupe pro-dos' && !hasDos(disk);
+}
+
+// Which Pro-DOS a system disk boots: 1 (1.9: it asks for a Pro-DOS disk in
+// A: and SPACE), 2 (2.0: A: is a RAM drive, drive 1 is B:), or 0 if the
+// disk is none. Found by its SAMDOS directory (tracks 0-3, two 256-byte
+// entries a sector).
+export function proDosSystem(disk) {
+    if (!hasDos(disk)) return 0;
+    for (let c = 0; c < 4; c++) {
+        for (let n = 1; n <= 10; n++) {
+            const s = disk.sectorById(c, 0, n);
+            if (!s) continue;
+            for (let e = 0; e + 11 <= s.length; e += 256) {
+                const name = s[e] ? text(s, e + 1, e + 11).toLowerCase() : '';
+                if (name.startsWith('procode')) return 1;
+                if (name.startsWith('pro-dos')) return 2;
+            }
+        }
+    }
+    return 0;
+}
+
+// a file on a Pro-DOS disk, by its CP/M directory entry (a user number,
+// then the name and type padded with spaces) in the first tracks
+export function cpmHasFile(disk, name, type) {
+    const want = [...(name.padEnd(8) + type.padEnd(3)).toUpperCase()].map(c => c.charCodeAt(0));
+    for (let c = 0; c < 4; c++) {
+        for (let h = 0; h < 2; h++) {
+            for (const sec of disk.track(c, h) || []) {
+                const d = sec.data;
+                for (let e = 0; e + 32 <= d.length; e += 32) {
+                    if (d[e] <= 15 && want.every((b, k) => (d[e + 1 + k] & 0x7F) === b)) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+export function isProDosSystem(disk) { return proDosSystem(disk) > 0; }
+
 // A disk holding one CODE file at #8000, as SimCoupe makes one from a .sbt
 // (Disk.cpp FileDisk): a directory entry "autoExec", the file from track 4
 // on, each sector 510 bytes of it and the next track / sector. Returns the

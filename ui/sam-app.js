@@ -2,7 +2,8 @@
 // keyboard and the sound, run 50 frames a second.
 
 import { SamCoupe, FB_W, FB_H } from '../core/sam/sam.js';
-import { loadSamDisk, isSamDiskName } from '../core/sam/sam-disk.js';
+import { loadSamDisk, isSamDiskName, isProDosDisk, proDosSystem, cpmHasFile } from '../core/sam/sam-disk.js';
+import { MOTOR_ON } from '../core/sam/vl1772.js';
 import { ZipLoader } from '../core/loaders/zip.js';
 
 // PC key (KeyboardEvent.code) -> SAM key
@@ -40,6 +41,16 @@ export async function createSamApp(o) {
         const r = await fetch(o.romBase + 'samdos2.sbt');
         if (r.ok) m.setDos(await r.arrayBuffer());
     } catch (e) { /* disks without a DOS then say NO DOS, as on the machine */ }
+    // Pro-DOS's system disk, for CP/M disks: roms/prodos.dsk if there is one,
+    // else the last one opened on the page
+    let proDos = null;
+    try {
+        const r = await fetch(o.romBase + 'prodos.dsk');
+        if (r.ok) {
+            const d = new Uint8Array(await r.arrayBuffer());
+            if (proDosSystem(loadSamDisk(d))) proDos = d;
+        }
+    } catch (e) { /* then one opened on the page */ }
     m.reset();
 
     // ---- screen ----
@@ -211,10 +222,34 @@ export async function createSamApp(o) {
         }
         return tape ? insertTape(file, andBoot, prefer) : insert(file, 0, andBoot, prefer);
     };
+    // A CP/M disk: Pro-DOS boots from its system disk, and once it has read
+    // itself in (BOOT typed, the drive's motor on and off again) the CP/M
+    // disk goes into drive 1, then as each Pro-DOS wants it:
+    //   1.9  SPACE answers "Insert A Pro-Dos Disk Into Drive A:"
+    //   2.0  B: (its A: is a RAM drive, drive 1 is B:)
+    // and LOAD when the disk has a LOAD.COM (as games released for it start)
+    let cpm = null;                               // { disk, name, version, spun }
+    const typeIn = (keys, from) => {
+        let f = from;
+        for (const k of keys) { script.push([f, k, true], [f + 4, k, false]); f += 8; }
+        return f;
+    };
     const tickBoot = () => {
         while (script.length && script[0][0] <= m.frames) {
             const [, k, down] = script.shift();
             m.key(k, down);
+        }
+        if (cpm && !script.length) {
+            const motor = m.drives[0].status & MOTOR_ON;
+            if (motor) cpm.spun = true;
+            else if (cpm.spun) {
+                m.drives[0].insert(cpm.disk);
+                names[0] = cpm.name;
+                say(`drive 1: ${cpm.name} (CP/M, Pro-DOS ${cpm.version === 1 ? '1.9' : '2'})`);
+                const f = typeIn(cpm.version === 1 ? ['SPACE'] : ['B', ':', 'RETURN'], m.frames + 25);
+                if (cpmHasFile(cpm.disk, 'LOAD', 'COM')) typeIn(['L', 'O', 'A', 'D', 'RETURN'], f + 100);
+                cpm = null;
+            }
         }
     };
     const names = ['', ''];
@@ -227,10 +262,36 @@ export async function createSamApp(o) {
                 const files = (await ZipLoader.extract(data)).filter(f => isSamDiskName(f.name));
                 if (!files.length) throw new Error('no SAM disk in the ZIP');
                 const want = prefer.split(/[\\/]/).pop().toLowerCase();
-                const f = files.find(x => x.name.split('/').pop().toLowerCase() === want) || files[0];
+                let f = files.find(x => x.name.split('/').pop().toLowerCase() === want);
+                if (!f) {
+                    // a CP/M release: Pro-DOS's system disk and the game's disk
+                    const disks = files.map(x => { try { return { x, d: loadSamDisk(new Uint8Array(x.data)) }; } catch (e) { return null; } }).filter(Boolean);
+                    const sys = disks.find(e => proDosSystem(e.d));
+                    const game = disks.find(e => isProDosDisk(e.d));
+                    if (sys && game) { proDos = new Uint8Array(sys.x.data); f = game.x; }
+                }
+                f = f || files[0];
                 data = new Uint8Array(f.data); name = f.name;
             }
-            m.drives[drive].insert(loadSamDisk(data));
+            const disk = loadSamDisk(data);
+            if (proDosSystem(disk)) proDos = data;
+            cpm = null;
+            if (andBoot && drive === 0 && isProDosDisk(disk)) {
+                if (!proDos) {
+                    m.drives[0].insert(disk);
+                    names[0] = name;
+                    say(`${name}: a CP/M disk - open Pro-DOS's system disk first (or put it in roms/prodos.dsk), then this one`);
+                    return name;
+                }
+                const sys = loadSamDisk(proDos);
+                m.drives[0].insert(sys);
+                cpm = { disk, name, version: proDosSystem(sys), spun: false };
+                say(`Pro-DOS boots, then ${name}`);
+                boot();
+                canvas.focus({ preventScroll: true });
+                return name;
+            }
+            m.drives[drive].insert(disk);
             names[drive] = name;
             say(`drive ${drive + 1}: ${name}`);
             if (andBoot) boot();

@@ -25,7 +25,7 @@
         // need roms/samcoupe.rom (not in the repository); without it they are
         // reported as skipped, not failed.
         import { SamCoupe, PALETTE, T_LINE, T_FRAME, TOP, KEYS } from '../core/sam/sam.js';
-        import { SamDisk, loadSamDisk, hasDos, makeFileDisk, MGT_SIZE } from '../core/sam/sam-disk.js';
+        import { SamDisk, loadSamDisk, hasDos, makeFileDisk, MGT_SIZE, isProDosDisk, isProDosSystem, cpmHasFile } from '../core/sam/sam-disk.js';
         import { VL1772, crcBlock, RECORD_NOT_FOUND, CRC_ERROR, DRQ, BUSY } from '../core/sam/vl1772.js';
         import { isSamRelease } from '../ui/sam-player.js';
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
@@ -469,6 +469,21 @@
             assert(txt[3] === '40 IF (x) THEN STOP', 'spaces around commands', txt[3]);
             assert(txt[4] === '50 REM hi "', 'REM as written', txt[4]);
             assert(txt[5] === '60 LET b={{9}}' && ls[5].obfuscations[0].actual === 9, 'a hidden number shows its value', txt[5]);
+        }
+
+        section('CP/M: Pro-DOS disks');
+        {
+            const cpm = new Uint8Array(737280);                 // 80 x 2 x 9 x 512
+            [...'SAM Coupe Pro-Dos.'].forEach((c, k) => { cpm[16 + k] = c.charCodeAt(0); });
+            assert(isProDosDisk(loadSamDisk(cpm)) && !isProDosSystem(loadSamDisk(cpm)), 'a Pro-DOS (CP/M) disk by its first sector');
+            assert(!isProDosDisk(loadSamDisk(new Uint8Array(737280))), 'a blank 9-sector disk is not one');
+            const v2 = cpm.slice();
+            [...'SAM Coupe Pro-DOS'].forEach((c, k) => { v2[16 + k] = c.charCodeAt(0); }); v2[33] = 0;
+            [...'LOAD    COM'].forEach((c, k) => { v2[0x1201 + k] = c.charCodeAt(0); });     // user 0 at 0x1200
+            assert(isProDosDisk(loadSamDisk(v2)), "Pro-DOS 2's disks: SAM Coupe Pro-DOS");
+            assert(cpmHasFile(loadSamDisk(v2), 'LOAD', 'COM') && !cpmHasFile(loadSamDisk(cpm), 'LOAD', 'COM'), 'LOAD.COM in its CP/M directory');
+            const sys = makeFileDisk(new Uint8Array(600)).disk || makeFileDisk(new Uint8Array(600));
+            assert(!isProDosSystem(sys), 'a SAMDOS disk without procode is not the system disk');
         }
 
         section('SAM tape headers');
