@@ -57,6 +57,8 @@ export async function createSamApp(o) {
     // ---- keyboard ----
     const down = new Set();
     const onKey = (e, isDown) => {
+        // typing into the debugger's fields is not typing on the SAM
+        if (e.target && e.target.closest && e.target.closest('input, select, textarea')) return;
         const k = KEYMAP[e.code];
         if (!k) return;
         e.preventDefault();
@@ -106,13 +108,29 @@ export async function createSamApp(o) {
     // ---- the loop ----
     let paused = false, last = performance.now(), acc = 0;
     const FRAME_MS = 20;
+    const setPaused = (p) => {
+        paused = !!p;
+        if (o.pause) o.pause.textContent = paused ? '▶ Run' : '⏸ Pause';
+        if (paused) { m.releaseAll(); draw(); }
+        o.onPauseChange?.(paused);
+    };
+    // One frame as the page runs it; false when a breakpoint stopped it
+    const frame = () => {
+        tickBoot();
+        const hit = m.runFrame();
+        if (hit) {                                 // a breakpoint: stop where it is
+            setPaused(true);
+            o.onBreak?.(hit);
+            return false;
+        }
+        if (soundOn && node) node.port.postMessage({ left: m.audioL.slice(), right: m.audioR.slice() });
+        return true;
+    };
     const tick = (now) => {
         if (!paused) {
             acc += Math.min(now - last, 100);
             while (acc >= FRAME_MS) {
-                tickBoot();
-                m.runFrame();
-                if (soundOn && node) node.port.postMessage({ left: m.audioL.slice(), right: m.audioR.slice() });
+                if (!frame()) { acc = 0; break; }
                 acc -= FRAME_MS;
             }
             draw();
@@ -182,13 +200,18 @@ export async function createSamApp(o) {
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
-    o.reset?.addEventListener('click', () => { m.reset(); canvas.focus(); });
-    o.pause?.addEventListener('click', () => {
-        paused = !paused;
-        o.pause.textContent = paused ? '▶ Run' : '⏸ Pause';
-    });
+    o.reset?.addEventListener('click', () => { m.reset(); draw(); o.onPauseChange?.(paused); canvas.focus(); });
+    o.pause?.addEventListener('click', () => setPaused(!paused));
     o.sound?.addEventListener('click', () => setSound(!soundOn));
     canvas.focus();
     say('');
-    return { machine: m, setSound, pause: (p) => { paused = p; }, draw, insert, boot, tickBoot };
+    // runFrames(n): n frames as the page would run them (for scripts and tests);
+    // stops early on a breakpoint, returns how many ran
+    const runFrames = (n) => {
+        let i = 0;
+        while (i < n && !paused) { i++; if (!frame()) break; }
+        draw();
+        return i;
+    };
+    return { machine: m, setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames };
 }
