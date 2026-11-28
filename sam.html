@@ -61,7 +61,7 @@
             <div class="tab-container" id="tabContainer">
                 <div class="tab-bar">
                     <button class="tab-btn active" data-tab="debug" title="The debugger (a click on the open tab hides it)"><span class="arrow">▼</span>Debug</button>
-                    <button class="tab-btn" data-tab="utils" title="Explorer, GFX, OCR, Info"><span class="arrow">▶</span>Utils</button>
+                    <button class="tab-btn" data-tab="utils" title="Explorer, GFX, OCR, Export/Import (screenshots, GIF), Mapper, Info"><span class="arrow">▶</span>Utils</button>
                 </div>
                 <div class="tab-content active" id="debug"></div>
                 <div class="tab-content" id="utils"></div>
@@ -98,7 +98,8 @@
                 dbg.refresh();
             }
             if (open && name === 'utils' && !utils) {
-                utils = await createSamUtils({ root: document.getElementById('utils'), machine: window.samApp.machine,
+                utils = await createSamUtils({ root: document.getElementById('utils'), app: window.samApp, machine: window.samApp.machine,
+                    getName: () => window.samApp.diskName?.() || 'sam',
                     getDebugger: () => dbg, symbols, say: (t) => { document.getElementById('status').textContent = t; } });
             }
             try { localStorage.setItem('zxm8-sam-tab', open ? name : '-'); } catch (e) { /* not kept */ }

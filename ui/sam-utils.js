@@ -6,12 +6,16 @@
 //   GFX       ui/graphics-viewer.js on the SAM's memory: the CPU's 64K, or
 //             one of its 32 pages
 //   OCR       ui/text-ripper.js likewise
+//   Export    screenshots, frames as a GIF or a ZIP, memory as binary: the
+//             SAM's own (ui/sam-export.js), the main one is a Spectrum's
+//   Mapper    ui/mapper-ui.js as it is, capturing from a 320 x 240 picture
+//             (a point a SAM pixel); Ctrl+Space captures, Ctrl+arrows move,
+//             Ctrl+Shift+Up/Down change floor, while its tab is open
 //   Info      the SAM's ports, paging registers, screen modes and timings
 //
 // The markup is the main page's (html/tools/*.html, and the OCR extract
 // dialog from html/dialogs.html), spliced in as ui/boot.js splices it. Not
-// here: Compare, Tests, Export/Import and Mapper, which work on a
-// Spectrum's state and the main debugger's own managers.
+// here: Compare and Tests, which work on a Spectrum's state.
 
 import { DSKLoader } from '../core/fdc.js';
 import { Disassembler } from '../core/disasm.js';
@@ -19,6 +23,7 @@ import { SZXLoader } from '../core/loaders/szx.js';
 import { RZXLoader } from '../core/loaders/rzx.js';
 import { ZipLoader } from '../core/loaders/zip.js';
 import { downloadFile } from '../core/utils.js';
+import { createSamExport } from './sam-export.js';
 
 const h2 = (v) => (v & 0xFF).toString(16).toUpperCase().padStart(2, '0');
 
@@ -80,17 +85,21 @@ function infoHtml(ports) {
 </div>`;
 }
 
-export async function createSamUtils({ root, machine: m, getDebugger, symbols, say }) {
+export async function createSamUtils({ root, app, machine: m, getDebugger, symbols, say, getName }) {
     root.innerHTML = `
       <div class="tools-subtab-bar">
         <button class="tools-subtab-btn active" data-toolstab="explorer">Explorer</button>
         <button class="tools-subtab-btn" data-toolstab="graphics">GFX</button>
         <button class="tools-subtab-btn" data-toolstab="ocr">OCR</button>
+        <button class="tools-subtab-btn" data-toolstab="export">Export/Import</button>
+        <button class="tools-subtab-btn" data-toolstab="mapper">Mapper</button>
         <button class="tools-subtab-btn" data-toolstab="saminfo">Info</button>
       </div>
       <div data-include="html/tools/explorer.html"></div>
       <div data-include="html/tools/graphics.html"></div>
       <div data-include="html/tools/ocr.html"></div>
+      <div class="tools-subtab-content" id="tools-export"></div>
+      <div data-include="html/tools/mapper.html"></div>
       <div class="tools-subtab-content" id="tools-saminfo"></div>`;
     await spliceAll(root);
     await addOcrDialog();
@@ -114,8 +123,21 @@ export async function createSamUtils({ root, machine: m, getDebugger, symbols, s
     const showMessage = (text) => say?.(text);
     const dbg = () => getDebugger?.();
 
-    let gfx = null, ocr = null, explorer = false;
+    let gfx = null, ocr = null, explorer = false, exporter = null, mapper = null, gameMapper = null;
     const ensure = async (tab) => {
+        if (tab === 'export' && !exporter) {
+            exporter = createSamExport({ root: document.getElementById('tools-export'), app, getName, say });
+        }
+        if (tab === 'mapper' && !mapper) {
+            const [{ initMapperUI }, { GameMapper }] = await Promise.all([import('./mapper-ui.js'), import('../tools/game-mapper.js')]);
+            gameMapper = new GameMapper();
+            mapper = initMapperUI({
+                gameMapper,
+                getScreenCanvas: () => app.getNativeCanvas(),
+                getScreenDimensions: () => ({ borderLeft: 32, borderTop: 24, width: 320, height: 240 }),
+            });
+            mapper.updateUI();
+        }
         if (tab === 'explorer' && !explorer) {
             explorer = true;
             const { initExplorer } = await import('./explorer.js');
@@ -155,13 +177,31 @@ export async function createSamUtils({ root, machine: m, getDebugger, symbols, s
         try { localStorage.setItem('zxm8-sam-utils-tab', tab); } catch (e) { /* not kept */ }
         await ensure(tab);
     };
+    // the Mapper's keys, while its tab is open (and not the SAM's then)
+    window.addEventListener('keydown', (e) => {
+        if (!mapper || !e.ctrlKey || e.altKey) return;
+        const tab = document.getElementById('tools-mapper');
+        if (!tab || !tab.classList.contains('active') || !root.offsetParent) return;
+        if (e.target.closest?.('input, select, textarea')) return;
+        const act = (fn) => { e.preventDefault(); e.stopImmediatePropagation(); mapper.action(fn); };
+        const moved = (dx, dy) => () => { gameMapper.move(dx, dy); mapper.updateUI(); };
+        if (e.shiftKey && e.key === 'ArrowUp') return act(() => { gameMapper.moveFloor(1); mapper.updateUI(); });
+        if (e.shiftKey && e.key === 'ArrowDown') return act(() => { gameMapper.moveFloor(-1); mapper.updateUI(); });
+        if (e.shiftKey) return;
+        if (e.code === 'Space') return act(mapper.captureScreen);
+        if (e.key === 'ArrowLeft') return act(moved(-1, 0));
+        if (e.key === 'ArrowRight') return act(moved(1, 0));
+        if (e.key === 'ArrowUp') return act(moved(0, -1));
+        if (e.key === 'ArrowDown') return act(moved(0, 1));
+    }, true);
+
     root.querySelector('.tools-subtab-bar').addEventListener('click', (e) => {
         const b = e.target.closest('.tools-subtab-btn');
         if (b) show(b.dataset.toolstab);
     });
     let t0 = 'explorer';
     try { t0 = localStorage.getItem('zxm8-sam-utils-tab') || 'explorer'; } catch (e) { /* none */ }
-    await show(['explorer', 'graphics', 'ocr', 'saminfo'].includes(t0) ? t0 : 'explorer');
+    await show(['explorer', 'graphics', 'ocr', 'export', 'mapper', 'saminfo'].includes(t0) ? t0 : 'explorer');
 
     return { show, refresh: () => { if (gfx) gfx.updateGraphicsViewer(); } };
 }

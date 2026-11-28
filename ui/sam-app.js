@@ -129,7 +129,23 @@ export async function createSamApp(o) {
             return false;
         }
         if (soundOn && node) node.port.postMessage({ left: m.audioL.slice(), right: m.audioR.slice() });
+        for (const cb of frameListeners) { try { cb(m); } catch (e) { console.error(e); } }
         return true;
+    };
+    // called after every frame the page runs (recording frames, a batch of
+    // screenshots); returns the function that takes it off again
+    const frameListeners = new Set();
+    const onFrame = (cb) => { frameListeners.add(cb); return () => frameListeners.delete(cb); };
+    // The picture at one SAM pixel a point: 320 x 240 (the screen 256 x 192
+    // and its border 32 / 24), for tools that crop by Spectrum-sized pixels
+    // (the Mapper). Mode 3's 512 across is taken a point in two here.
+    let native = null;
+    const getNativeCanvas = () => {
+        if (!native) { native = document.createElement('canvas'); native.width = FB_W / 2; native.height = FB_H; }
+        const nctx = native.getContext('2d'), id = nctx.createImageData(FB_W / 2, FB_H), d = new Uint32Array(id.data.buffer);
+        for (let y = 0; y < FB_H; y++) for (let x = 0; x < FB_W / 2; x++) d[y * (FB_W / 2) + x] = m.fb[y * FB_W + x * 2];
+        nctx.putImageData(id, 0, 0);
+        return native;
     };
     const tick = (now) => {
         if (!paused) {
@@ -231,6 +247,6 @@ export async function createSamApp(o) {
         if (document.pointerLockElement === canvas) document.exitPointerLock();
         if (audio) audio.close().catch(() => {});
     };
-    return { machine: m, setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames, destroy,
+    return { machine: m, onFrame, getNativeCanvas, diskName: () => names[0], setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames, destroy,
              say, soundState: () => (audio ? audio.state : 'none') };
 }

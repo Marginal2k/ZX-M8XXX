@@ -30,6 +30,8 @@
         import { isSamRelease } from '../ui/sam-player.js';
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
         import { renderScreen, screenByteAt, screenBase } from '../core/sam/sam-screen.js';
+        import { samImage } from '../ui/sam-export.js';
+        import { GifEncoder, createZip } from '../core/gif-zip.js';
         import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
 
         const TEST_VERSION = '1.0.0';
@@ -293,6 +295,38 @@
             assert(diff(out) === 0, 'palette changed at line 100: the line CLUTs draw what the machine drew', `${diff(out)} pixels differ`);
             renderScreen(m.ram, 6, 4, m.clut, 0, false, out);
             assert(diff(out) > 0, 'and one CLUT for the whole screen does not');
+        }
+
+        // ---------------------------------------------------------------
+        section('Export: screenshots, GIF, ZIP');
+        {
+            const m = new SamCoupe();
+            for (let i = 0; i < m.fb.length; i++) m.fb[i] = (0xFF000000 | (i * 2654435761)) >>> 0;
+            const px = (img, x, y) => new Uint32Array(img.data.buffer)[y * img.width + x];
+            const fbAt = (x2, y) => m.fb[(BORDER_Y + y) * FB_W + BORDER_X * 2 + x2];   // x2: one of the 512 points across
+            const sz = (img) => img.width + 'x' + img.height;
+            // SimCoupe's sizes, whatever the mode
+            assert(sz(samImage(m.fb, 1, 'screen')) === '512x384' && sz(samImage(m.fb, 1, 'border')) === '640x480', '100%: 512x384, 640x480 with the border');
+            assert(sz(samImage(m.fb, 0.5, 'screen')) === '256x192' && sz(samImage(m.fb, 0.5, 'border')) === '320x240', '50%: 256x192, 320x240');
+            assert(sz(samImage(m.fb, 2, 'screen')) === '1024x768', '200%: 1024x768');
+            assert(sz(samImage(m.fb, 1, 'screen', true)) === '512x192' && sz(samImage(m.fb, 2, 'screen', true)) === '1024x384', 'raw: 512x192, 1024x384');
+            const full = samImage(m.fb, 1, 'screen'), raw = samImage(m.fb, 1, 'screen', true), half = samImage(m.fb, 0.5, 'screen');
+            let exact = true;
+            for (let y = 0; y < 192 && exact; y++) for (let x = 0; x < 512; x++) {
+                const f = fbAt(x, y);
+                if (px(raw, x, y) !== f || px(full, x, 2 * y) !== f || px(full, x, 2 * y + 1) !== f) { exact = false; break; }
+            }
+            assert(exact, '100%: every one of the 512 points (mode 3 whole), a line twice; raw a line once');
+            assert(px(half, 5, 7) === fbAt(10, 7), '50%: a point a SAM pixel (every other of the 512)');
+            const reg = samImage(m.fb, 1, { x: 10, y: 20, w: 8, h: 4 });
+            assert(sz(reg) === '16x8' && px(reg, 1, 0) === fbAt(21, 20), 'a region in SAM pixels, from its corner');
+            const g = new GifEncoder(4, 2);
+            g.addFrame(new Uint8ClampedArray(32).fill(255), 4);
+            g.addFrame(new Uint8ClampedArray(32), 4);
+            const gif = g.finish();
+            assert(String.fromCharCode(...gif.slice(0, 6)) === 'GIF89a' && gif[gif.length - 1] === 0x3B, 'GIF: header and trailer (core/gif-zip.js)');
+            const z = createZip([{ name: 'a.png', data: new Uint8Array([1, 2, 3]) }]);
+            assert(z[0] === 0x50 && z[1] === 0x4B && z.length === 30 + 5 + 3 + 46 + 5 + 22, 'ZIP: one stored file');
         }
 
         // ---------------------------------------------------------------
