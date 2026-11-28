@@ -29,6 +29,10 @@
             <label class="btn-like toolbar-select" title="Open a disk (MGT, SAD, DSK, also .gz / .zip) into drive 1 and boot it">Disk 1…<input type="file" id="file1" hidden></label>
             <label class="btn-like toolbar-select" title="Open a disk into drive 2">Disk 2…<input type="file" id="file2" hidden></label>
             <button id="btnSave" class="toolbar-select" title="Save drive 1: an MGT, or an EDSK for a disk in its own format">Save disk 1</button>
+            <label class="btn-like toolbar-select" title="Open a tape (TAP, TZX, WAV, also in a .zip) and LOAD &quot;&quot; it">Tape…<input type="file" id="tapeFile" hidden></label>
+            <button id="btnTapePlay" class="toolbar-select" title="Play / stop the tape (it starts and stops by itself when the ROM loads)">Play</button>
+            <button id="btnTapeRewind" class="toolbar-select" title="Rewind the tape">⏮</button>
+            <label class="btn-like" style="font-size:12px;gap:3px" title="Load ROM-loader blocks at once (SimCoupe's tape traps); off: in real time"><input type="checkbox" id="chkTapeFast" checked> Fast load</label>
         </div>
 
         <div class="main-layout">
@@ -41,6 +45,7 @@
                 <div class="status">
                     <span class="status-item"><span class="status-value" id="frames" style="min-width:48px;display:inline-block;text-align:right">0</span></span>
                     <span class="status-item"><span class="status-label">💾</span><span class="status-value" id="status">-</span></span>
+                    <span class="status-item"><span class="status-label">📼</span><span class="status-value" id="tapeStatus">-</span></span>
                     <span class="status-item"><span class="status-label">MODE:</span><span class="status-value" id="modeInfo">-</span></span>
                 </div>
                 <div class="controls">
@@ -53,7 +58,7 @@
                 </div>
                 <div class="sam-keys">
                     Alt = SYMBOL · Ctrl = CNTRL · F1–F9 / numpad = F1–F9 · F10 / Numpad0 = F0 · Ins or ] = EDIT · End = INV ·
-                    Backspace = DELETE · F9 boots a disk · drop a disk on the page to boot it ·
+                    Backspace = DELETE · F9 boots a disk · drop a disk or a tape on the page to start it ·
                     click the screen for the mouse, Esc lets it go
                 </div>
             </div>
@@ -119,6 +124,9 @@
             save: document.getElementById('btnSave'),
             drop: document.body,
             romBase: q.get('roms') || 'roms/',
+            tape: { file: document.getElementById('tapeFile'), play: document.getElementById('btnTapePlay'),
+                    rewind: document.getElementById('btnTapeRewind'), fast: document.getElementById('chkTapeFast'),
+                    status: document.getElementById('tapeStatus') },
         });
         tabs.querySelector('.tab-bar').addEventListener('click', (e) => {
             const b = e.target.closest('.tab-btn');

@@ -192,12 +192,15 @@ full screen), the same methods and messages. An `.mgt` with no codes stays a
 - The disk (MGT, SAD, DSK, also in a zip; `launch` picks the file in it)
   goes into drive 1, and boots as a user boots it: a key past the start
   screen, then `BOOT`.
+- A tape (TAP, TZX, WAV, also in a zip) is `LOAD ""`ed: the ROM loader's
+  blocks load at once (SimCoupe's tape traps), anything else in real time
+  at 6 MHz; the tape starts and stops as the ROM's loader wants it.
 - A disk with no DOS on it boots SAMDOS 2.2 (`roms/samdos2.sbt`, SimCoupe's)
   while the ROM loads track 4, then the disk is back.
 - Needs `roms/samcoupe.rom` (ROM 3.0) next to the Spectrum ROMs.
 - `sammouse`: the SAM mouse is always there; a click on the screen captures
   the pointer, Esc lets it go.
-- Not yet: the on-screen joystick and keyboard, tapes.
+- Not yet: the on-screen joystick and keyboard.
 
 The returned object has `sam` (the machine) in place of `spectrum`, and
 `runFrames(n)` for scripts.

@@ -48,7 +48,10 @@
  *           ("12:8000", "R1:D000"); stepInto / stepOver / runToAddress /
  *           runToInterrupt / runToRet, one instruction at a time
  *
- * Not yet: MIDI, a tape.
+ *   tape    TAP / TZX / WAV on port 254 bit 6, as SimCoupe plays it, with its
+ *           fast loading through the ROM's loader (core/sam/sam-tape.js)
+ *
+ * Not yet: MIDI.
  */
 
 import { Z80 } from '../z80.js';
@@ -56,6 +59,7 @@ import { SAA1099, SAA_CLOCK } from '../saa1099.js';
 import { VL1772 } from './vl1772.js';
 import { hasDos, makeFileDisk } from './sam-disk.js';
 import { initTriggerState, mixTriggers } from '../debug-triggers.js';
+import { SamTape } from './sam-tape.js';
 
 export const CPU_CLOCK = 6000000;
 export const T_LINE = 384;
@@ -155,6 +159,7 @@ export class SamCoupe {
         this.callStack = [];
         this.cpu.portRead = (port) => this.portIn(port);
         this.cpu.portWrite = (port, val) => this.portOut(port, val);
+        this.tape = new SamTape(this);
         this.mouse = { dx: 0, dy: 0, buttons: 0, pos: 0, last: 0, buf: new Uint8Array(9) };
         // The disks turn in real time: 300 rpm, ten frames a revolution
         this.frameBase = 0;
@@ -177,6 +182,7 @@ export class SamCoupe {
     reset() {
         this.lmpr = 0; this.hmpr = 0; this.vmpr = 0; this.lepr = 0; this.hepr = 0;
         this._restoreDos();
+        if (this.tape) this.tape.stop();
         if (this.callStack) { this.callStack.length = 0; this.histCount = 0; }
         this.border = 0; this.lineInt = 0xFF;
         this.clut.fill(0);
@@ -300,6 +306,7 @@ export class SamCoupe {
         }
         switch (lo) {
             case 0xFE: {
+                if (this.tape.player.blocks.length) this.tape.onReadEar(this.cpu.pc);
                 const k = hi === 0xFF ? this.keys[8] & this._mouseIn() : this._keyRows(hi);
                 return (k & 0x1F) | (this.border & 0x80) | (this.ear ? 0x40 : 0);
             }
@@ -368,6 +375,8 @@ export class SamCoupe {
             if (cpu.eiPending) { cpu.eiPending = false; cpu.iff1 = cpu.iff2 = true; }
             cpu.tStates += 4;
             cpu.incR();
+        } else if (this.tape.player.blocks.length && this.tape.onStep(cpu.pc)) {
+            cpu.tStates += 4;                       // a tape block loaded at once in its place
         } else {
             this._startInstr();
             this._currentInstrPC = cpu.pc;

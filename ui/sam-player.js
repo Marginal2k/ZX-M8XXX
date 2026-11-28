@@ -6,10 +6,11 @@
 // options, the same bar (sound, start again, full screen) and returns the same
 // methods: restart, setFullscreen, setSound, screenshot, destroy.
 //
-// The machine is core/sam/ run by ui/sam-app.js, as on sam.html: the disk goes
+// The machine is core/sam/ run by ui/sam-app.js, as on sam.html: a disk goes
 // into drive 1 and boots the way a user boots it (a key past the start screen,
-// then BOOT); a disk with no DOS of its own boots SAMDOS 2.2. Not here yet:
-// the on-screen joystick and keyboard of the Spectrum player, tapes.
+// then BOOT; a disk with no DOS of its own boots SAMDOS 2.2), a tape (TAP,
+// TZX, WAV) is LOADed "" with the ROM loader's blocks loaded at once. Not
+// here yet: the on-screen joystick and keyboard of the Spectrum player.
 
 import { createSamApp } from './sam-app.js';
 
@@ -84,7 +85,7 @@ export async function createSamPlayer(container, opts = {}) {
     async function boot() {
         if (!media) { app.machine.reset(); status('', 'ready'); return; }
         lastSay = '';
-        const ran = await app.insert(media, 0, true, opts.launchFilePath || '');
+        const ran = await app.open(media, true, opts.launchFilePath || '');
         if (ran) status('', 'ready'); else status(lastSay || 'This disk could not be loaded', 'error');
     }
     try { media = await fetchMedia(); } catch (e) { status(e.message, 'error'); }

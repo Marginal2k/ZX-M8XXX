@@ -31,6 +31,7 @@
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
         import { renderScreen, screenByteAt, screenBase } from '../core/sam/sam-screen.js';
         import { samImage } from '../ui/sam-export.js';
+        import { findRomHooks } from '../core/sam/sam-tape.js';
         import { GifEncoder, createZip } from '../core/gif-zip.js';
         import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
 
@@ -402,6 +403,42 @@
             } else {
                 log('  no CALL met to step over', 'note');
             }
+        }
+
+        section('Tape');
+        if (!rom || rom.byteLength !== 32768) {
+            log('  skipped: roms/samcoupe.rom is not here', 'note');
+        } else {
+            const romBytes = new Uint8Array(rom);
+            const hk = findRomHooks(romBytes);
+            assert(hk.ldstrt === 0xE679 && hk.loadExit === 0xE739 && hk.loadFail === 0xE6F5 && hk.svldcom === 0xE612 && hk.edglp === 0x2053,
+                   'the ROM loader found by its bytes, where ROM 3.0 has it', JSON.stringify(hk));
+            // a TAP of one block: type 0x13, 4 bytes, the parity
+            const body = [0x13, 0xDE, 0xAD, 0xBE, 0xEF];
+            const par = body.reduce((x, y) => x ^ y, 0);
+            const blk = [...body, par];
+            const tap = new Uint8Array([blk.length & 0xFF, blk.length >> 8, ...blk]);
+            const set = () => {
+                const m = new SamCoupe(); m.loadRom(rom);
+                m.portOut(0x00FA, 0x40 | 0x20 | 0);                  // RAM in A/B, ROM1 in D
+                m.portOut(0x00FB, 2);
+                m.tape.insert(tap, 't.tap');
+                const c = m.cpu;
+                c.h = 0x80; c.l = 0x00; c.d = 0; c.e = 4; m.write(0x5AC8, 0);
+                c.pc = hk.ldstrt - 1; c.iff1 = false;
+                return m;
+            };
+            let m = set(); m.cpu.a_ = 0x13;
+            m._step();
+            assert(m.cpu.pc === hk.loadExit && m.read(0x8000) === 0xDE && m.read(0x8003) === 0xEF && m.cpu.l === 0,
+                   'fast load: the block at HL, out through LOADEXIT with the parity 0');
+            assert(m.tape.player.currentBlock === 1 && !m.tape.playing, 'and the tape on at the next block, stopped');
+            m = set(); m.cpu.a_ = 0x10;
+            m._step();
+            assert(m.cpu.pc === hk.loadFail && !(m.cpu.f & 0x41) && m.read(0x8000) === 0, 'a type it does not wait for: LOADFAIL, NZ NC, nothing written');
+            m = set(); m.tape.traps = false; m.cpu.a_ = 0x13;
+            m._step();
+            assert(m.cpu.pc !== hk.loadExit && m.tape.playing, 'traps off: the ROM runs on, the tape plays');
         }
 
         section('Done');

@@ -165,14 +165,51 @@ export async function createSamApp(o) {
     // A program boots as on the machine: reset, a key past the start screen,
     // then BOOT typed in, each key held 4 frames and let go for 4
     let script = [];
-    const boot = () => {
+    // (a tape: LOAD "" in place of BOOT)
+    const boot = (command = ['B', 'O', 'O', 'T', 'RETURN']) => {
         m.reset();
         script = [];
         let f = m.frames + 300;
         const tap = (k) => { script.push([f, k, true], [f + 4, k, false]); f += 8; };
         tap('SPACE');
         f += 50;                                  // the ROM clears its screen
-        for (const k of ['B', 'O', 'O', 'T', 'RETURN']) tap(k);
+        for (const k of command) tap(k);
+    };
+    const LOAD_TAPE = ['L', 'O', 'A', 'D', 'SPACE', '"', '"', 'RETURN'];
+    const isTapeName = (n) => /\.(tap|tzx|wav|csw)$/i.test(n || '');
+
+    // A tape (TAP, TZX, WAV, or one in a zip) on the SAM's tape input; with
+    // andBoot the machine is reset and LOAD "" typed
+    const insertTape = async (file, andBoot = false, prefer = '') => {
+        try {
+            let data = new Uint8Array(await file.arrayBuffer()), name = file.name;
+            if (ZipLoader.isZip(data)) {
+                const files = (await ZipLoader.extract(data)).filter(f => isTapeName(f.name));
+                if (!files.length) throw new Error('no tape in the ZIP');
+                const want = prefer.split(/[\\/]/).pop().toLowerCase();
+                const f = files.find(x => x.name.split('/').pop().toLowerCase() === want) || files[0];
+                data = new Uint8Array(f.data); name = f.name;
+            }
+            m.tape.insert(data, name);
+            say(`tape: ${name}`);
+            if (andBoot) boot(LOAD_TAPE);
+            canvas.focus({ preventScroll: true });
+            return name;
+        } catch (e) {
+            say(`${file.name}: ${e.message}`);
+            return null;
+        }
+    };
+    // a disk or a tape, by its name (a zip by what is in it)
+    const open = async (file, andBoot = true, prefer = '') => {
+        let tape = isTapeName(file.name) || isTapeName(prefer);
+        if (!tape && /\.zip$/i.test(file.name || '')) {
+            try {
+                const list = await ZipLoader.extract(new Uint8Array(await file.arrayBuffer()));
+                tape = !list.some(f => isSamDiskName(f.name)) && list.some(f => isTapeName(f.name));
+            } catch (e) { /* the disk path will say */ }
+        }
+        return tape ? insertTape(file, andBoot, prefer) : insert(file, 0, andBoot, prefer);
     };
     const tickBoot = () => {
         while (script.length && script[0][0] <= m.frames) {
@@ -213,7 +250,7 @@ export async function createSamApp(o) {
         on(o.drop, 'drop', (e) => {
             e.preventDefault();
             const f = e.dataTransfer.files[0];
-            if (f) insert(f, 0, true);
+            if (f) open(f, true);
         });
     }
     if (o.save) on(o.save, 'click', () => {
@@ -247,6 +284,28 @@ export async function createSamApp(o) {
         if (document.pointerLockElement === canvas) document.exitPointerLock();
         if (audio) audio.close().catch(() => {});
     };
-    return { machine: m, onFrame, getNativeCanvas, diskName: () => names[0], setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames, destroy,
+    // ---- the tape's controls ----
+    if (o.tape) {
+        const t = o.tape;
+        const show = () => {
+            if (t.status) t.status.textContent = m.tape.inserted ? `${m.tape.status()} ${m.tape.name}` : '-';
+            if (t.play) t.play.textContent = m.tape.playing ? (t.stopLabel || 'Stop') : (t.playLabel || 'Play');
+        };
+        m.tape.onChange = show;
+        if (t.file) on(t.file, 'change', () => { if (t.file.files[0]) insertTape(t.file.files[0], true); t.file.value = ''; });
+        if (t.play) on(t.play, 'click', () => { if (m.tape.playing) m.tape.stop(); else m.tape.play(); canvas.focus({ preventScroll: true }); });
+        if (t.rewind) on(t.rewind, 'click', () => { m.tape.rewind(); canvas.focus({ preventScroll: true }); });
+        if (t.fast) {
+            let keep = null; try { keep = localStorage.getItem('zxm8-sam-tape-fast'); } catch (e) { /* none */ }
+            t.fast.checked = keep !== '0';
+            m.tape.traps = t.fast.checked;
+            on(t.fast, 'change', () => { m.tape.traps = t.fast.checked; try { localStorage.setItem('zxm8-sam-tape-fast', t.fast.checked ? '1' : '0'); } catch (e) { /* not kept */ } });
+        }
+        show();
+        const iv = setInterval(() => { if (m.tape.playing) show(); }, 500);
+        offs.push(() => clearInterval(iv));
+    }
+
+    return { machine: m, onFrame, open, insertTape, getNativeCanvas, diskName: () => names[0], setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames, destroy,
              say, soundState: () => (audio ? audio.state : 'none') };
 }
