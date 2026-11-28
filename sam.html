@@ -13,6 +13,7 @@
       debugger on the right).
     -->
     <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/dialogs.css">
     <style>
         .top-bar .sam-title { font-weight: 600; margin-right: 8px; color: var(--cyan); }
         .top-bar label.btn-like { display: inline-flex; align-items: center; cursor: pointer; }
@@ -59,9 +60,11 @@
 
             <div class="tab-container" id="tabContainer">
                 <div class="tab-bar">
-                    <button class="tab-btn active" id="tabDebug" title="Click to hide or show the debugger"><span class="arrow">▼</span>Debug</button>
+                    <button class="tab-btn active" data-tab="debug" title="The debugger (a click on the open tab hides it)"><span class="arrow">▼</span>Debug</button>
+                    <button class="tab-btn" data-tab="utils" title="Explorer, GFX, OCR, Info"><span class="arrow">▶</span>Utils</button>
                 </div>
                 <div class="tab-content active" id="debug"></div>
+                <div class="tab-content" id="utils"></div>
             </div>
         </div>
     </div>
@@ -71,20 +74,36 @@
         import { createSamApp } from './ui/sam-app.js';
         import { createSamDebugger } from './ui/sam-debug.js';
         import { loadSamSymbols } from './core/sam/sam-symbols.js';
+        import { createSamUtils } from './ui/sam-utils.js';
         const symbols = await loadSamSymbols('data/sam/');
         const q = new URLSearchParams(location.search);
         const panel = document.getElementById('debug'), tabs = document.getElementById('tabContainer');
         let dbg = null;
-        const debuggerOn = () => !tabs.classList.contains('collapsed');
-        const showDebugger = (on) => {
-            tabs.classList.toggle('collapsed', !on);
-            document.querySelector('#tabDebug .arrow').textContent = on ? '▼' : '▶';
-            if (on) {
+        // The tabs, as on the main page: a click opens one, a click on the open
+        // one hides them all (the screen then has the page to itself)
+        let utils = null, active = 'debug';
+        const debuggerOn = () => !tabs.classList.contains('collapsed') && active === 'debug';
+        const showTab = async (name, open = true) => {
+            active = name;
+            tabs.classList.toggle('collapsed', !open);
+            for (const b of tabs.querySelectorAll('.tab-btn')) {
+                const on = b.dataset.tab === name;
+                b.classList.toggle('active', on);
+                b.querySelector('.arrow').textContent = on && open ? '▼' : '▶';
+            }
+            panel.classList.toggle('active', name === 'debug');
+            document.getElementById('utils').classList.toggle('active', name === 'utils');
+            if (open && name === 'debug') {
                 if (!dbg) dbg = createSamDebugger({ root: panel, machine: window.samApp.machine, app: window.samApp, symbols });
                 dbg.refresh();
             }
-            try { localStorage.setItem('zxm8-sam-debug', on ? '1' : '0'); } catch (e) { /* not kept */ }
+            if (open && name === 'utils' && !utils) {
+                utils = await createSamUtils({ root: document.getElementById('utils'), machine: window.samApp.machine,
+                    getDebugger: () => dbg, symbols, say: (t) => { document.getElementById('status').textContent = t; } });
+            }
+            try { localStorage.setItem('zxm8-sam-tab', open ? name : '-'); } catch (e) { /* not kept */ }
         };
+        const showDebugger = (on) => showTab('debug', on);
         const canvas = document.getElementById('screen');
         window.samApp = await createSamApp({
             onBreak: (hit) => { showDebugger(true); dbg.onBreak(hit); },
@@ -100,10 +119,15 @@
             drop: document.body,
             romBase: q.get('roms') || 'roms/',
         });
-        document.getElementById('tabDebug').addEventListener('click', () => showDebugger(!debuggerOn()));
-        let d0 = q.get('debug');
-        if (d0 === null) { try { d0 = localStorage.getItem('zxm8-sam-debug'); } catch (e) { /* none */ } }
-        showDebugger(d0 !== '0');
+        tabs.querySelector('.tab-bar').addEventListener('click', (e) => {
+            const b = e.target.closest('.tab-btn');
+            if (!b) return;
+            const open = !tabs.classList.contains('collapsed');
+            showTab(b.dataset.tab, !(open && b.dataset.tab === active));
+        });
+        let t0 = q.get('debug') === '0' ? '-' : q.get('debug') === '1' ? 'debug' : q.get('tab');
+        if (!t0) { try { t0 = localStorage.getItem('zxm8-sam-tab') || 'debug'; } catch (e) { t0 = 'debug'; } }
+        await showTab(t0 === '-' ? 'debug' : t0, t0 !== '-');
 
         // the status line: frames, the screen mode
         const m = window.samApp.machine;

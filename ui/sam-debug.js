@@ -606,6 +606,8 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
     renderAll();
     return {
         destroy() { clearInterval(live); },
+        goToAddress: (a) => goCode(a & 0xFFFF),
+        goToMemoryAddress: (a) => { memSrc.value = 'cpu'; goMem(a & 0xFFFF); },
         onBreak(hit) { after(hit); },
         refresh: renderAll,
         say,
