@@ -105,7 +105,9 @@ export async function createSamApp(o) {
             m.sampleRate = audio.sampleRate;
         }
         if (audio) { if (on) await audio.resume(); else await audio.suspend(); }
-        if (o.sound) o.sound.textContent = on ? '🔊 Sound on' : '🔇 Sound off';
+        // a page with its own labels (o.labels) gets them; else these
+        const lb = o.labels || {};
+        if (o.sound) o.sound.textContent = on ? (lb.soundOn ?? '🔊 Sound on') : (lb.soundOff ?? '🔇 Sound off');
     };
 
     // ---- the loop ----
@@ -113,7 +115,7 @@ export async function createSamApp(o) {
     const FRAME_MS = 20;
     const setPaused = (p) => {
         paused = !!p;
-        if (o.pause) o.pause.textContent = paused ? '▶ Run' : '⏸ Pause';
+        if (o.pause) o.pause.textContent = paused ? ((o.labels || {}).run ?? '▶ Run') : ((o.labels || {}).pause ?? '⏸ Pause');
         if (paused) { m.releaseAll(); draw(); }
         o.onPauseChange?.(paused);
     };

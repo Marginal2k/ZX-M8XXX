@@ -3,54 +3,69 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
     <title>ZX-M8XXX SAM Coupé</title>
     <!--
       The SAM Coupé: a machine of its own, on its own page (core/sam/,
-      ui/sam-app.js). It shares the Z80 and the SAA1099 with the Spectrum.
+      ui/sam-app.js, ui/sam-debug.js). It shares the Z80, the SAA1099, the
+      disassembler and the trigger engine with the Spectrum, and the look:
+      css/app.css and the main page's layout (screen on the left, the
+      debugger on the right).
     -->
+    <link rel="stylesheet" href="css/app.css">
     <style>
-        html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
-        body { display: flex; flex-direction: column; overflow: hidden; }
-        #bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: #1b1b1b; border-bottom: 1px solid #333; flex-wrap: wrap; }
-        #bar button, #bar label.btn { background: #2c2c2c; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
-        #bar button:hover, #bar label.btn:hover { background: #3a3a3a; }
-        #bar .title { font-weight: 600; margin-right: 8px; }
-        #bar .status { color: #999; margin-left: auto; }
-        #main { flex: 1 1 auto; min-height: 0; display: flex; }
-        #screen { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; background: #000; }
-        #debug { flex: 0 0 auto; width: 470px; border-left: 1px solid #333; }
-        #debug.hidden { display: none; }
-        #screen canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; outline: none; }
-        /* a fixed size: x1 is 320 x 240 (the screen and its border), x2, x3 */
-        #screen.zoomed { overflow: auto; }
-        #screen.zoomed canvas { width: var(--zw); height: var(--zh); flex: 0 0 auto; margin: auto; }
-        #bar select { background: #2c2c2c; color: #ddd; border: 1px solid #444; border-radius: 4px; padding: 3px 4px; font: inherit; }
-        #keys { padding: 4px 8px; color: #888; font-size: 12px; background: #1b1b1b; border-top: 1px solid #333; }
+        .top-bar .sam-title { font-weight: 600; margin-right: 8px; color: var(--cyan); }
+        .top-bar label.btn-like { display: inline-flex; align-items: center; cursor: pointer; }
+        #screen { width: var(--zw, 640px); height: var(--zh, 480px); outline: none; }
+        .sam-keys { color: var(--text-secondary); font-size: 11px; line-height: 1.5; max-width: 660px; margin-top: 6px; }
+        .status #status { color: var(--cyan); }
     </style>
 </head>
 <body>
-    <div id="bar">
-        <span class="title">SAM Coupé</span>
-        <label class="btn" title="Open a disk (MGT, SAD, DSK, also .gz / .zip) into drive 1 and boot it">📂 Disk 1<input type="file" id="file1" hidden></label>
-        <label class="btn" title="Open a disk into drive 2">📂 Disk 2<input type="file" id="file2" hidden></label>
-        <button id="btnSave" title="Save drive 1: an MGT, or an EDSK for a disk in its own format">💾 Save disk 1</button>
-        <button id="btnReset" title="Reset">⟲ Reset</button>
-        <button id="btnPause" title="Pause">⏸ Pause</button>
-        <button id="btnSound" title="Sound">🔇 Sound off</button>
-        <select id="zoom" title="Screen size: fit the window, or x1 (320 x 240), x2, x3">
-            <option value="fit">Fit</option><option value="1">x1</option><option value="2">x2</option><option value="3">x3</option>
-        </select>
-        <button id="btnDebug" title="The debugger: registers, code, memory, breakpoints">🐞 Debugger</button>
-        <span class="status" id="status"></span>
+    <div class="container">
+        <div class="top-bar">
+            <span class="sam-title">SAM Coupé</span>
+            <label class="btn-like toolbar-select" title="Open a disk (MGT, SAD, DSK, also .gz / .zip) into drive 1 and boot it">Disk 1…<input type="file" id="file1" hidden></label>
+            <label class="btn-like toolbar-select" title="Open a disk into drive 2">Disk 2…<input type="file" id="file2" hidden></label>
+            <button id="btnSave" class="toolbar-select" title="Save drive 1: an MGT, or an EDSK for a disk in its own format">Save disk 1</button>
+        </div>
+
+        <div class="main-layout">
+            <div class="emulator-section">
+                <div class="screen-container">
+                    <div class="screen-wrapper">
+                        <canvas id="screen" tabindex="0"></canvas>
+                    </div>
+                </div>
+                <div class="status">
+                    <span class="status-item"><span class="status-value" id="frames" style="min-width:48px;display:inline-block;text-align:right">0</span></span>
+                    <span class="status-item"><span class="status-label">💾</span><span class="status-value" id="status">-</span></span>
+                    <span class="status-item"><span class="status-label">MODE:</span><span class="status-value" id="modeInfo">-</span></span>
+                </div>
+                <div class="controls">
+                    <button id="btnPause" class="primary" title="Run / Pause">Pause</button>
+                    <button id="btnReset" title="Reset the machine">Reset</button>
+                    <select id="zoom" title="Screen size: x1 is 320 x 240 (the screen and its border)">
+                        <option value="1">x1</option><option value="2">x2</option><option value="3">x3</option>
+                    </select>
+                    <button id="btnSound" title="Sound on / off">🔇</button>
+                </div>
+                <div class="sam-keys">
+                    Alt = SYMBOL · Ctrl = CNTRL · F1–F9 / numpad = F1–F9 · F10 / Numpad0 = F0 · Ins or ] = EDIT · End = INV ·
+                    Backspace = DELETE · F9 boots a disk · drop a disk on the page to boot it ·
+                    click the screen for the mouse, Esc lets it go
+                </div>
+            </div>
+
+            <div class="tab-container" id="tabContainer">
+                <div class="tab-bar">
+                    <button class="tab-btn active" id="tabDebug" title="Click to hide or show the debugger"><span class="arrow">▼</span>Debug</button>
+                </div>
+                <div class="tab-content active" id="debug"></div>
+            </div>
+        </div>
     </div>
-    <div id="main">
-        <div id="screen"><canvas id="canvas" tabindex="0"></canvas></div>
-        <div id="debug" class="hidden"></div>
-    </div>
-    <div id="keys">
-        Alt = SYMBOL · Ctrl = CNTRL · F1–F9 / numpad = F1–F9 · F10 / Numpad0 = F0 · Ins or ] = EDIT · End = INV ·
-        Backspace = DELETE · F9 boots a disk · drop a disk on the page to boot it · click the screen for the mouse, Esc to let it go
-    </div>
+
     <script src="lib/pako.min.js"></script>
     <script type="module">
         import { createSamApp } from './ui/sam-app.js';
@@ -58,17 +73,24 @@
         import { loadSamSymbols } from './core/sam/sam-symbols.js';
         const symbols = await loadSamSymbols('data/sam/');
         const q = new URLSearchParams(location.search);
-        const panel = document.getElementById('debug');
+        const panel = document.getElementById('debug'), tabs = document.getElementById('tabContainer');
         let dbg = null;
-        const openDebugger = () => {
-            panel.classList.remove('hidden');
-            if (!dbg) dbg = createSamDebugger({ root: panel, machine: window.samApp.machine, app: window.samApp, symbols });
-            dbg.refresh();
+        const debuggerOn = () => !tabs.classList.contains('collapsed');
+        const showDebugger = (on) => {
+            tabs.classList.toggle('collapsed', !on);
+            document.querySelector('#tabDebug .arrow').textContent = on ? '▼' : '▶';
+            if (on) {
+                if (!dbg) dbg = createSamDebugger({ root: panel, machine: window.samApp.machine, app: window.samApp, symbols });
+                dbg.refresh();
+            }
+            try { localStorage.setItem('zxm8-sam-debug', on ? '1' : '0'); } catch (e) { /* not kept */ }
         };
+        const canvas = document.getElementById('screen');
         window.samApp = await createSamApp({
-            onBreak: (hit) => { openDebugger(); dbg.onBreak(hit); },
-            onPauseChange: () => { if (dbg && !panel.classList.contains('hidden')) dbg.refresh(); },
-            canvas: document.getElementById('canvas'),
+            onBreak: (hit) => { showDebugger(true); dbg.onBreak(hit); },
+            onPauseChange: () => { if (dbg && debuggerOn()) dbg.refresh(); },
+            labels: { run: 'Run', pause: 'Pause', soundOn: '🔊', soundOff: '🔇' },
+            canvas,
             status: document.getElementById('status'),
             reset: document.getElementById('btnReset'),
             pause: document.getElementById('btnPause'),
@@ -78,28 +100,31 @@
             drop: document.body,
             romBase: q.get('roms') || 'roms/',
         });
-        document.getElementById('btnDebug').addEventListener('click', () => {
-            if (panel.classList.contains('hidden')) openDebugger(); else panel.classList.add('hidden');
-        });
-        if (q.get('debug') === '1') openDebugger();
+        document.getElementById('tabDebug').addEventListener('click', () => showDebugger(!debuggerOn()));
+        let d0 = q.get('debug');
+        if (d0 === null) { try { d0 = localStorage.getItem('zxm8-sam-debug'); } catch (e) { /* none */ } }
+        showDebugger(d0 !== '0');
+
+        // the status line: frames, the screen mode
+        const m = window.samApp.machine;
+        setInterval(() => {
+            document.getElementById('frames').textContent = m.frames;
+            document.getElementById('modeInfo').textContent = `${((m.vmpr >> 5) & 3) + 1} · page ${m.vmpr & 0x1F}`;
+        }, 250);
 
         // Screen size. (On the Spectrum page F1 does it; on the SAM F1 is a
         // key of its keypad, so it is a list here.)
-        const zoom = document.getElementById('zoom'), screenBox = document.getElementById('screen');
+        const zoom = document.getElementById('zoom');
         const setZoom = (z) => {
             zoom.value = z;
-            const fixed = z !== 'fit';
-            screenBox.classList.toggle('zoomed', fixed);
-            if (fixed) {
-                screenBox.style.setProperty('--zw', 320 * z + 'px');
-                screenBox.style.setProperty('--zh', 240 * z + 'px');
-            }
+            canvas.style.setProperty('--zw', 320 * z + 'px');
+            canvas.style.setProperty('--zh', 240 * z + 'px');
             try { localStorage.setItem('zxm8-sam-zoom', z); } catch (e) { /* not kept */ }
         };
         let z0 = q.get('zoom');
         if (!z0) { try { z0 = localStorage.getItem('zxm8-sam-zoom'); } catch (e) { /* none */ } }
-        setZoom(['fit', '1', '2', '3'].includes(z0) ? z0 : 'fit');
-        zoom.addEventListener('change', () => { setZoom(zoom.value); document.getElementById('canvas').focus(); });
+        setZoom(['1', '2', '3'].includes(z0) ? z0 : '2');
+        zoom.addEventListener('change', () => { setZoom(zoom.value); canvas.focus(); });
     </script>
 </body>
 </html>
