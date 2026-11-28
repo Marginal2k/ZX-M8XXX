@@ -29,6 +29,8 @@
         import { VL1772, crcBlock, RECORD_NOT_FOUND, CRC_ERROR, DRQ, BUSY } from '../core/sam/vl1772.js';
         import { isSamRelease } from '../ui/sam-player.js';
         import { SamSymbols, parseLabels, loadSamSymbols } from '../core/sam/sam-symbols.js';
+        import { renderScreen, screenByteAt, screenBase } from '../core/sam/sam-screen.js';
+        import { FB_W, BORDER_X, BORDER_Y } from '../core/sam/sam.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -245,6 +247,33 @@
             assert(sy.resolveSpec('R0:ERROR') === 'R0:8' && sy.resolveSpec('mystart-8010') === '8000-8010', 'names in a breakpoint spec');
             sy.setLabel(0x8000, '');
             assert(!sy.lookup('mystart'), 'a label taken away');
+        }
+
+        // ---------------------------------------------------------------
+        section('Screen viewer');
+        {
+            assert(screenByteAt(1, 0, 0).offset === 0 && screenByteAt(1, 0, 1).offset === 0x100 &&
+                   screenByteAt(1, 0, 8).offset === 0x20 && screenByteAt(1, 0, 64).offset === 0x800, 'mode 1: in thirds, as the Spectrum');
+            assert(screenByteAt(1, 16, 9).attr === 0x1800 + 32 + 1, 'mode 1: 8x8 attributes after the pixels');
+            assert(screenByteAt(2, 16, 9).offset === 9 * 32 + 1 && screenByteAt(2, 16, 9).attr === 0x2000 + 9 * 32 + 1, 'mode 2: linear, attributes at 2000');
+            assert(screenByteAt(4, 8, 2).offset === 2 * 128 + 2 && screenBase(5, 4) === 4 << 14 && screenBase(5, 1) === 5 << 14,
+                   'modes 3-4: 128 bytes a line, on the even page');
+            // each mode against the machine's own picture
+            const m = new SamCoupe();
+            for (let i = 0; i < 16; i++) m.clut[i] = (i * 7 + 3) & 0x7F;
+            for (let i = 0; i < 0x8000; i++) m.ram[(6 << 14) + i] = (i * 37 + (i >> 7)) & 0xFF;
+            m.hmpr = 0x40;                                           // mode 3 colours from CLUT 8-11
+            const out = new Uint32Array(512 * 192);
+            for (const mode of [1, 2, 3, 4]) {
+                m.vmpr = 6 | ((mode - 1) << 5);
+                m.rpos = 0; m.renderTo(1e9);
+                renderScreen(m.ram, 6, mode, m.clut, (m.hmpr >> 3) & 0x0C, !!(m.frames & 16), out);
+                let bad = 0;
+                for (let y = 0; y < 192; y++) for (let x = 0; x < 512; x++) {
+                    if (out[y * 512 + x] !== m.fb[(BORDER_Y + y) * FB_W + BORDER_X * 2 + x]) bad++;
+                }
+                assert(bad === 0, `mode ${mode}: the viewer draws what the machine draws`, `${bad} pixels differ`);
+            }
         }
 
         // ---------------------------------------------------------------

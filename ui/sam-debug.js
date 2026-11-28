@@ -17,6 +17,7 @@
 // belong to the SAM: F7 and F8 are keys of its keypad.)
 
 import { Disassembler } from '../core/disasm.js';
+import { renderScreen, screenByteAt, screenBase, SCR_W, SCR_H } from '../core/sam/sam-screen.js';
 
 const h2 = (v) => (v & 0xFF).toString(16).toUpperCase().padStart(2, '0');
 const h4 = (v) => (v & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
@@ -52,6 +53,7 @@ const CSS = `
 .sd .bps div { display:flex; gap:6px; align-items:center; }
 .sd .bps .off { color:#585b70; text-decoration:line-through; }
 .sd .note { color:#6c7086; }
+.sd canvas.scr { width:100%; aspect-ratio:512 / 384; image-rendering:pixelated; background:#000; cursor:crosshair; display:block; }
 .sd .dis .lbl { color:#f9e2af; }
 .sd .dis .sym { color:#fab387; }
 .sd .lst div { white-space:pre; cursor:pointer; }
@@ -96,8 +98,19 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
       <div class="st"></div>
       <div class="box"><div class="ttl">Registers</div><div class="regs"></div><div class="flags"></div></div>
       <div class="box"><div class="ttl">Paging</div><div class="pg"></div></div>
+      <div class="box"><div class="ttl">Screen
+          <select class="spage" title="the RAM page to show"></select>
+          <select class="smode" title="the mode to show it in">
+            <option value="">mode (VMPR)</option><option value="1">mode 1</option><option value="2">mode 2</option>
+            <option value="3">mode 3</option><option value="4">mode 4</option>
+          </select>
+        </div>
+        <canvas class="scr" width="512" height="192"></canvas>
+        <div class="sinfo note">point at it: where each pixel comes from; click: that byte in Memory</div>
+      </div>
       <div class="box"><div class="ttl">Code <input class="dgo" size="10" placeholder="addr"> <label><input type="checkbox" class="follow" checked> follow PC</label></div><div class="dis"></div></div>
-      <div class="box"><div class="ttl">Memory <input class="mgo" size="10" placeholder="addr"></div><div class="mem"></div></div>
+      <div class="box"><div class="ttl">Memory <select class="msrc" title="what the dump shows"></select>
+          <input class="mgo" size="10" placeholder="addr"></div><div class="mem"></div></div>
       <div class="cols">
         <div class="box"><div class="ttl">Stack</div><div class="stk"></div></div>
         <div class="box"><div class="ttl">Calls</div><div class="lst calls"></div></div>
@@ -242,15 +255,83 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
     });
     $('.follow').addEventListener('change', () => { disTop = null; renderCode(); });
 
+    // ---- screen ----
+    const spage = $('.spage'), smode = $('.smode');
+    spage.add(new Option('page (VMPR)', ''));
+    for (let i = 0; i < 32; i++) spage.add(new Option('page ' + i, String(i)));
+    const scr = $('.scr'), sctx = scr.getContext('2d');
+    const simg = sctx.createImageData(SCR_W, SCR_H), sbuf = new Uint32Array(simg.data.buffer);
+    const shown = () => ({
+        page: spage.value === '' ? m.vmpr & 0x1F : +spage.value,
+        mode: smode.value === '' ? ((m.vmpr >> 5) & 3) + 1 : +smode.value,
+    });
+    function renderScreenBox() {
+        const { page, mode } = shown();
+        renderScreen(m.ram, page, mode, m.clut, (m.hmpr >> 3) & 0x0C, !!(m.frames & 16), sbuf);
+        sctx.putImageData(simg, 0, 0);
+    }
+    const pixelAt = (e) => {
+        const r = scr.getBoundingClientRect();
+        const x = Math.min(SCR_W - 1, Math.max(0, Math.floor((e.clientX - r.left) * SCR_W / r.width)));
+        const y = Math.min(SCR_H - 1, Math.max(0, Math.floor((e.clientY - r.top) * SCR_H / r.height)));
+        const { page, mode } = shown();
+        const at = screenByteAt(mode, x, y);
+        const base = screenBase(page, mode);
+        const abs = (base + at.offset) & (m.ram.length - 1);
+        const attr = at.attr === null ? null : (base + at.attr) & (m.ram.length - 1);
+        const px = mode === 3 ? x : x >> 1;
+        return { x: px, y, mode, abs, attr };
+    };
+    const physical = (abs) => `${abs >> 14}:${h4(abs & 0x3FFF)}`;
+    scr.addEventListener('mousemove', (e) => {
+        const p = pixelAt(e);
+        $('.sinfo').textContent = `mode ${p.mode}  x ${p.x} y ${p.y}  byte ${physical(p.abs)} = ${h2(m.ram[p.abs])}` +
+            (p.attr === null ? '' : `  attr ${physical(p.attr)} = ${h2(m.ram[p.attr])}`);
+    });
+    scr.addEventListener('click', (e) => {
+        const p = pixelAt(e);
+        memSrc.value = 'r' + (p.abs >> 14);
+        memAddr = p.abs & 0x3FF8;
+        memMark = p.abs & 0x3FFF;
+        renderMem();
+    });
+    spage.addEventListener('change', renderScreenBox);
+    smode.addEventListener('change', renderScreenBox);
+
+    // ---- memory: the CPU's 64K, or a page as it is ----
+    const memSrc = $('.msrc');
+    memSrc.add(new Option('CPU 64K', 'cpu'));
+    for (let i = 0; i < 32; i++) memSrc.add(new Option('RAM page ' + i, 'r' + i));
+    memSrc.add(new Option('ROM0', 'R0')); memSrc.add(new Option('ROM1', 'R1'));
+    for (let i = 0; i < 64; i++) memSrc.add(new Option('ext page ' + i, 'x' + i));
+    let memMark = -1;
+    // the buffer, base and size of the source; null for the CPU's view
+    const source = () => {
+        const v = memSrc.value;
+        if (v === 'cpu') return null;
+        if (v[0] === 'r') return { buf: m.ram, base: +v.slice(1) << 14, ro: false };
+        if (v[0] === 'R') return { buf: m.rom, base: v === 'R1' ? 0x4000 : 0, ro: true };
+        return { buf: m.ext, base: +v.slice(1) << 14, ro: false };
+    };
+    const memRead = (a) => { const src = source(); return src ? src.buf[src.base + (a & 0x3FFF)] : peek(a); };
+    const memWrite = (a, v) => {
+        const src = source();
+        if (!src) { m.write(a, v); return; }
+        if (!src.ro) src.buf[src.base + (a & 0x3FFF)] = v;
+    };
+    memSrc.addEventListener('change', () => { memMark = -1; memAddr = source() ? memAddr & 0x3FF8 : memAddr; renderMem(); });
+
     // ---- memory ----
     function renderMem() {
         const rows = [];
         for (let r = 0; r < 16; r++) {
-            const a = (memAddr + r * 8) & 0xFFFF;
+            const lim = source() ? 0x3FFF : 0xFFFF;
+            const a = (memAddr + r * 8) & lim;
             const bytes = [], chars = [];
             for (let i = 0; i < 8; i++) {
-                const v = peek(a + i);
-                bytes.push(`<span data-m="${(a + i) & 0xFFFF}">${h2(v)}</span>`);
+                const v = memRead((a + i) & lim);
+                const mark = ((a + i) & lim) === memMark ? ' style="background:#f9e2af;color:#11111b"' : '';
+                bytes.push(`<span data-m="${(a + i) & lim}"${mark}>${h2(v)}</span>`);
                 chars.push(v >= 32 && v < 127 ? esc(String.fromCharCode(v)) : '.');
             }
             rows.push(`<div><span class="a">${h4(a)}</span> <span class="x">${bytes.join(' ')}</span>  ${chars.join('')}</div>`);
@@ -260,21 +341,22 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
     $('.mem').addEventListener('dblclick', (e) => {
         const a = e.target.dataset.m;
         if (a === undefined) return;
-        editInline(e.target, h2(peek(+a)), (s) => {
+        editInline(e.target, h2(memRead(+a)), (s) => {
             const v = parseInt(s, 16);
-            if (!isNaN(v)) m.write(+a, v & 0xFF);
+            if (!isNaN(v)) memWrite(+a, v & 0xFF);
         });
     });
     $('.mem').addEventListener('wheel', (e) => {
         e.preventDefault();
-        memAddr = (memAddr + (e.deltaY > 0 ? 8 : -8)) & 0xFFFF;
+        memAddr = (memAddr + (e.deltaY > 0 ? 8 : -8)) & (source() ? 0x3FFF : 0xFFFF);
         renderMem();
     }, { passive: false });
     $('.mgo').addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
         const v = parseAddr(e.target.value);
         if (v === null) { say(`no such address or name: ${e.target.value}`); return; }
-        memAddr = v & 0xFFF8; renderMem();
+        memMark = -1;
+        memAddr = v & (source() ? 0x3FF8 : 0xFFF8); renderMem();
     });
 
     // ---- stack ----
@@ -418,7 +500,7 @@ export function createSamDebugger({ root, machine: m, app, symbols = null }) {
     }
 
     function renderAll() {
-        renderRegs(); renderPaging(); renderCode(); renderMem(); renderStack(); renderCalls(); renderHistory();
+        renderRegs(); renderPaging(); renderScreenBox(); renderCode(); renderMem(); renderStack(); renderCalls(); renderHistory();
         renderLabels(); renderBps();
     }
 
