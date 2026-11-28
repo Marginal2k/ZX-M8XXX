@@ -19,6 +19,7 @@ import {
 } from '../core/addr-format.js';
 import { isFlowBreak } from './mnemonic-format.js';
 import { BASIC_TOKENS, decodeBasicProgram } from '../core/basic-tokens.js';
+import { decodeSamBasicProgram, SAM_KEYWORDS } from '../core/sam/sam-basic.js';
 import { SLOT1_START, SCREEN_SIZE, SCREEN_BITMAP_SIZE, SCREEN_ATTR_SIZE } from '../core/constants.js';
 import { MGTLoader, MDRLoader, OPDLoader, DidaktikLoader } from '../core/loaders.js';
 import { searchEncoded, searchNibblePacked, decodeAt } from '../core/encoded-search.js';
@@ -2941,6 +2942,10 @@ export function initExplorerViews(xp) {
         });
     }
 
+    // the decoder of the program on show: SAM BASIC for a SAMDOS file
+    let basicDecoder = decodeBasicProgram;
+    const ZX_KEYWORDS = Object.values(BASIC_TOKENS).map(t => t[0]);
+
     // BASIC copy button handler
     const btnExplorerBasicCopy = document.getElementById('btnExplorerBasicCopy');
     const chkExplorerBasicAsListed = document.getElementById('chkExplorerBasicAsListed');
@@ -2950,7 +2955,7 @@ export function initExplorerViews(xp) {
                 return; // Nothing decoded yet
             }
             const asListed = chkExplorerBasicAsListed && chkExplorerBasicAsListed.checked;
-            const lines = decodeBasicProgram(xp.explorerBasicRawData, { deobfuscate: !asListed });
+            const lines = basicDecoder(xp.explorerBasicRawData, { deobfuscate: !asListed });
             if (lines.length === 0) return;
             // Format: strip {{}} markers from deobfuscated text
             const text = lines.map(l => l.number + ' ' + l.text.replace(/\{\{|\}\}/g, '')).join('\n');
@@ -2978,7 +2983,7 @@ export function initExplorerViews(xp) {
     function renderBasicCodeMode(lines) {
         let html = '';
         for (const line of lines) {
-            let highlighted = highlightBasicLine(line.text);
+            let highlighted = highlightBasicLine(line.text, basicDecoder === decodeSamBasicProgram ? SAM_KEYWORDS : ZX_KEYWORDS);
 
             html += `<div class="explorer-basic-line">`;
             html += `<span class="explorer-basic-linenum">${line.number}</span>`;
@@ -3058,6 +3063,7 @@ export function initExplorerViews(xp) {
 
         let data = null;
         let explorerBasicInfoHeader = '';
+        basicDecoder = decodeBasicProgram;
 
         if (xp.explorerParsed.type === 'tap') {
             const blockIdx = parseInt(source);
@@ -3089,6 +3095,7 @@ export function initExplorerViews(xp) {
             if (file) {
                 if (xp.explorerParsed.type === 'mgt') {
                     data = MGTLoader.extractFile(xp.explorerData, file);
+                    if (file.mgtType === 16) basicDecoder = decodeSamBasicProgram;     // SAMDOS: SAM BASIC
                     // Trim to program body length (excludes variables area)
                     if (data && (file.mgtType === 1 || file.mgtType === 16) && file.bodyLength > 0 && file.bodyLength < data.length) {
                         data = data.slice(0, file.bodyLength);
@@ -3164,7 +3171,7 @@ export function initExplorerViews(xp) {
 
         try {
             xp.explorerBasicRawData = data instanceof Uint8Array ? data : new Uint8Array(data);
-            const lines = decodeBasicProgram(data);
+            const lines = basicDecoder(data);
 
             if (lines.length === 0) {
                 const hexBytes = Array.from(data.slice(0, 16)).map(b => fmtByte(b)).join(' ');
@@ -3184,12 +3191,12 @@ export function initExplorerViews(xp) {
         }
     }
 
-    function highlightBasicLine(text) {
+    function highlightBasicLine(text, words = Object.values(BASIC_TOKENS).map(t => t[0])) {
         let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         html = html.replace(/"([^"]*)"/g, '<span class="explorer-basic-string">"$1"</span>');
 
-        const keywords = Object.values(BASIC_TOKENS).map(t => t[0]).sort((a, b) => b.length - a.length);
+        const keywords = [...words].sort((a, b) => b.length - a.length);
         for (const kw of keywords) {
             const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const regex = new RegExp('\\b(' + escaped + ')\\b', 'g');

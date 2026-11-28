@@ -34,6 +34,7 @@
         import { findRomHooks } from '../core/sam/sam-tape.js';
         import { GifEncoder, createZip } from '../core/gif-zip.js';
         import { FB_W, BORDER_X, BORDER_Y, SCREEN_T } from '../core/sam/sam.js';
+        import { decodeSamBasicProgram } from '../core/sam/sam-basic.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -443,6 +444,31 @@
             m = set(); m.tape.traps = false; m.cpu.a_ = 0x13;
             m._step();
             assert(m.cpu.pc !== hk.loadExit && m.tape.playing, 'traps off: the ROM runs on, the tape plays');
+        }
+
+        section('SAM BASIC in the Explorer');
+        {
+            const N = (v) => [0x0E, 0, 0, v & 0xFF, v >> 8, 0];              // a small integer's 5 bytes
+            const line = (n, body) => [n >> 8, n & 0xFF, (body.length + 1) & 0xFF, (body.length + 1) >> 8, ...body, 0x0D];
+            const t = (s) => [...s].map(c => c.charCodeAt(0));
+            const prog = new Uint8Array([
+                ...line(10, [0xE1, 0xFF, 0x63, ...t('0'), ...N(0), ...t(','), ...t('0'), ...N(0)]),   // POKE DVAR 0,0
+                ...line(20, [0x9C, ...t('a='), 0xFF, 0x43, ...t('101'), ...N(5)]),                  // LET a=BIN 101
+                ...line(30, [...t('go'), 0x0E, 0x11, 0x22, 0x33, 0x44, 0x55, ...t(':s1')]),         // a procedure, its hidden pointer
+                ...line(40, [0xD8, ...t('(x)'), 0x8D, 0xB1]),                                       // IF (x) THEN STOP
+                ...line(50, [0xB7, ...t('hi '), 0x22]),                                             // REM keeps its text
+                ...line(60, [0x9C, ...t('b='), ...t('7'), ...N(9)]),                                // a number that is not as written
+                0xFF,
+            ]);
+            const ls = decodeSamBasicProgram(prog);
+            const txt = ls.map(l => l.number + ' ' + l.text);
+            assert(ls.length === 6, 'six lines, up to the 0xFF', txt.join(' / '));
+            assert(txt[0] === '10 POKE DVAR 0,0', 'commands one byte, functions FF and a byte', txt[0]);
+            assert(txt[1] === '20 LET a=BIN 101', 'BIN digits are its number', txt[1]);
+            assert(txt[2] === '30 go:s1', "a procedure's pointer is not shown", txt[2]);
+            assert(txt[3] === '40 IF (x) THEN STOP', 'spaces around commands', txt[3]);
+            assert(txt[4] === '50 REM hi "', 'REM as written', txt[4]);
+            assert(txt[5] === '60 LET b={{9}}' && ls[5].obfuscations[0].actual === 9, 'a hidden number shows its value', txt[5]);
         }
 
         section('Done');
