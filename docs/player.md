@@ -25,7 +25,7 @@ and leaves none of its own.
 | `name`     | The file's name, when the URL does not end in it (the format is told partly by extension). |
 | `launch`   | The file in the archive to run (zxart's `launchFilePath`): the whole path, or just the name, in any case. |
 | `hw`       | zxart hardware codes, separated by commas (see below). |
-| `machine`  | A machine to use instead: `48k` `128k` `+2` `+2a` `+3` `pentagon` `pentagon1024` `scorpion` `scorpiontb` `scorpiongmx` `tc2048` `tc2068` `tk90x` `tk95` `dgama` `hc2000`. |
+| `machine`  | A machine to use instead: `48k` `128k` `+2` `+2a` `+3` `pentagon` `pentagon1024` `scorpion` `scorpiontb` `scorpiongmx` `tc2048` `tc2068` `tk90x` `tk95` `dgama` `hc2000`, or `samcoupe` (see below). |
 | `arrows`   | `1`/`0`: the cursor keys work the joystick, and Right Ctrl fires. The default is on when `hw` names a joystick. |
 | `flash`    | `0`: tapes load in real time. The default is instant loading where the ROM traps allow it. |
 | `sound`    | `0`: start muted. |
@@ -179,6 +179,28 @@ for the redraw.
 
 To try the mouse, `headless/player/mouse.tap` (not in the repository) is a
 BASIC loop that prints X, Y and the buttons and plots where the mouse is.
+
+## SAM Coupé
+
+A release whose hardware list has `samcoupe`, or `machine=samcoupe`, or a
+`.sad` file, is played by the SAM Coupé's own core (`core/sam/`, run by
+`ui/sam-player.js`) instead of a Spectrum. The page that embeds the player
+sees no difference: the same options, the same bar (sound, start again,
+full screen), the same methods and messages. An `.mgt` with no codes stays a
++D disk, as it may well be one.
+
+- The disk (MGT, SAD, DSK, also in a zip; `launch` picks the file in it)
+  goes into drive 1, and boots as a user boots it: a key past the start
+  screen, then `BOOT`.
+- A disk with no DOS on it boots SAMDOS 2.2 (`roms/samdos2.sbt`, SimCoupe's)
+  while the ROM loads track 4, then the disk is back.
+- Needs `roms/samcoupe.rom` (ROM 3.0) next to the Spectrum ROMs.
+- `sammouse`: the SAM mouse is always there; a click on the screen captures
+  the pointer, Esc lets it go.
+- Not yet: the on-screen joystick and keyboard, tapes.
+
+The returned object has `sam` (the machine) in place of `spectrum`, and
+`runFrames(n)` for scripts.
 
 ## Phones and tablets
 

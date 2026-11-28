@@ -27,6 +27,7 @@
         import { SamCoupe, PALETTE, T_LINE, T_FRAME, TOP, KEYS } from '../core/sam/sam.js';
         import { SamDisk, loadSamDisk, hasDos, makeFileDisk, MGT_SIZE } from '../core/sam/sam-disk.js';
         import { VL1772, crcBlock, RECORD_NOT_FOUND, CRC_ERROR, DRQ, BUSY } from '../core/sam/vl1772.js';
+        import { isSamRelease } from '../ui/sam-player.js';
 
         const TEST_VERSION = '1.0.0';
         const logEl = document.getElementById('log');
@@ -202,6 +203,17 @@
             assert(hasDos(disk), 'the made disk boots: BOOT at byte 256 of track 4 sector 1');
             assert(last.track === 5 && last.sector === 10, '10009 bytes: 20 sectors, the last at 5/10');
             assert(!hasDos(loadSamDisk(new Uint8Array(MGT_SIZE))), 'an empty disk has no DOS');
+        }
+
+        // ---------------------------------------------------------------
+        section('The player: which releases go to the SAM');
+        {
+            assert(isSamRelease({ hardware: ['samcoupe'] }), 'hw samcoupe');
+            assert(isSamRelease({ hardware: ['SamCoupe', 'sammouse'] }), 'any case, with sammouse');
+            assert(isSamRelease({ machine: 'samcoupe' }), 'machine=samcoupe');
+            assert(isSamRelease({ url: '/file/1/game.sad' }) && isSamRelease({ fileName: 'x.SAD.gz' }), 'a .sad');
+            assert(!isSamRelease({ url: '/file/1/game.mgt' }), 'an .mgt alone stays a +D disk');
+            assert(!isSamRelease({ hardware: ['pentagon128', 'saa'], url: 'a.trd' }), 'a Spectrum release with an SAA stays a Spectrum');
         }
 
         // ---------------------------------------------------------------

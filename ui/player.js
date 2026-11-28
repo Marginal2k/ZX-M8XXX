@@ -12,7 +12,7 @@
 //       fileName: 'game.zip',            // when the URL does not end in it
 //       launchFilePath: 'GAME.TRD',      // the file in the archive to run
 //       hardware: ['pentagon128', 'ts'], // zxart hardware codes
-//       machine: 'pentagon',             // override the machine (core/machines.js id)
+//       machine: 'pentagon',             // override the machine (core/machines.js id, or samcoupe)
 //       romBase: 'roms/',                // where the ROMs are served
 //       onStatus: (text, kind) => {},    // kind: 'info' | 'error' | 'ready'
 //   });
@@ -36,6 +36,7 @@ import { MGTLoader } from '../core/loaders/disk-mgt.js';
 import { OPDLoader } from '../core/loaders/disk-opus.js';
 import { hasPlusDSystem, addPlusDSystem, addMgtFile, mgtBasicFile } from '../core/mgt-sys.js';
 import { trdHasBootFile, extractBootFile, isHobetaFile, extractBootFromHobeta, injectBootIntoTrd } from '../core/trd-boot.js';
+import { isSamRelease, createSamPlayer } from './sam-player.js';
 
 const ICON = { reset: '⟲', sound: '🔊', mute: '🔇', full: '⛶', joy: '🎮', keys: '⌨' };
 
@@ -47,6 +48,11 @@ function nameFromUrl(url) {
 }
 
 export async function create(container, opts = {}) {
+    // A SAM Coupé release is played by the SAM's own core (ui/sam-player.js):
+    // the same options, the same bar, the same methods
+    if (isSamRelease({ ...opts, fileName: opts.fileName || nameFromUrl(opts.url || '') })) {
+        return createSamPlayer(container, opts);
+    }
     const status = (text, kind = 'info') => {
         msg.textContent = kind === 'ready' ? '' : text;
         msg.className = 'zxm8-msg' + (kind === 'error' ? ' zxm8-error' : '');

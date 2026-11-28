@@ -6,7 +6,7 @@ import { loadSamDisk, isSamDiskName } from '../core/sam/sam-disk.js';
 import { ZipLoader } from '../core/loaders/zip.js';
 
 // PC key (KeyboardEvent.code) -> SAM key
-const KEYMAP = {
+export const KEYMAP = {
     ShiftLeft: 'SHIFT', ShiftRight: 'SHIFT', AltLeft: 'SYMBOL', AltRight: 'SYMBOL',
     ControlLeft: 'CNTRL', ControlRight: 'CNTRL',
     ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
@@ -23,6 +23,9 @@ for (let c = 65; c <= 90; c++) KEYMAP['Key' + String.fromCharCode(c)] = String.f
 
 export async function createSamApp(o) {
     const m = new SamCoupe();
+    // every listener, so destroy() can take them all off again
+    const offs = [];
+    const on = (t, ev, fn, opt) => { t.addEventListener(ev, fn, opt); offs.push(() => t.removeEventListener(ev, fn, opt)); };
     const say = (t) => { if (o.status) o.status.textContent = t; };
     try {
         const r = await fetch(o.romBase + 'samcoupe.rom');
@@ -65,13 +68,13 @@ export async function createSamApp(o) {
         if (isDown) down.add(e.code); else down.delete(e.code);
         m.key(k, isDown);
     };
-    window.addEventListener('keydown', (e) => onKey(e, true));
-    window.addEventListener('keyup', (e) => onKey(e, false));
-    window.addEventListener('blur', () => { down.clear(); m.releaseAll(); });
+    on(window, 'keydown', (e) => onKey(e, true));
+    on(window, 'keyup', (e) => onKey(e, false));
+    on(window, 'blur', () => { down.clear(); m.releaseAll(); });
 
     // ---- mouse ----
     // A click on the screen captures the pointer for the SAM mouse; Esc lets it go
-    canvas.addEventListener('mousedown', (e) => {
+    on(canvas, 'mousedown', (e) => {
         if (document.pointerLockElement !== canvas) {
             canvas.requestPointerLock?.();
             return;
@@ -79,14 +82,14 @@ export async function createSamApp(o) {
         e.preventDefault();
         m.mouseButton(e.button === 0 ? 1 : e.button === 2 ? 2 : 3, true);
     });
-    window.addEventListener('mouseup', (e) => {
+    on(window, 'mouseup', (e) => {
         if (document.pointerLockElement === canvas) m.mouseButton(e.button === 0 ? 1 : e.button === 2 ? 2 : 3, false);
     });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    document.addEventListener('mousemove', (e) => {
+    on(canvas, 'contextmenu', (e) => e.preventDefault());
+    on(document, 'mousemove', (e) => {
         if (document.pointerLockElement === canvas) m.mouseMove(e.movementX, -e.movementY);
     });
-    document.addEventListener('pointerlockchange', () => {
+    on(document, 'pointerlockchange', () => {
         if (document.pointerLockElement !== canvas) { m.mouseButton(1, false); m.mouseButton(2, false); m.mouseButton(3, false); }
     });
 
@@ -136,9 +139,9 @@ export async function createSamApp(o) {
             draw();
         }
         last = now;
-        requestAnimationFrame(tick);
+        if (!stopped) raf = requestAnimationFrame(tick);
     };
-    requestAnimationFrame(tick);
+    let stopped = false, raf = requestAnimationFrame(tick);
 
     // ---- disks ----
     // A program boots as on the machine: reset, a key past the start screen,
@@ -160,36 +163,42 @@ export async function createSamApp(o) {
         }
     };
     const names = ['', ''];
-    const insert = async (file, drive, andBoot) => {
+    // file: a File, or anything with a name and arrayBuffer(); prefer: the
+    // file in a zip to take (zxart's launchFilePath), else its first SAM disk
+    const insert = async (file, drive, andBoot, prefer = '') => {
         try {
             let data = new Uint8Array(await file.arrayBuffer()), name = file.name;
             if (ZipLoader.isZip(data)) {
                 const files = (await ZipLoader.extract(data)).filter(f => isSamDiskName(f.name));
                 if (!files.length) throw new Error('no SAM disk in the ZIP');
-                data = new Uint8Array(files[0].data); name = files[0].name;
+                const want = prefer.split(/[\\/]/).pop().toLowerCase();
+                const f = files.find(x => x.name.split('/').pop().toLowerCase() === want) || files[0];
+                data = new Uint8Array(f.data); name = f.name;
             }
             m.drives[drive].insert(loadSamDisk(data));
             names[drive] = name;
             say(`drive ${drive + 1}: ${name}`);
             if (andBoot) boot();
+            canvas.focus({ preventScroll: true });
+            return name;
         } catch (e) {
             say(`${file.name}: ${e.message}`);
+            return null;
         }
-        canvas.focus();
     };
-    (o.files || []).forEach((input, i) => input?.addEventListener('change', () => {
+    (o.files || []).forEach((input, i) => input && on(input, 'change', () => {
         if (input.files[0]) insert(input.files[0], i, i === 0);
         input.value = '';
     }));
     if (o.drop) {
-        o.drop.addEventListener('dragover', (e) => e.preventDefault());
-        o.drop.addEventListener('drop', (e) => {
+        on(o.drop, 'dragover', (e) => e.preventDefault());
+        on(o.drop, 'drop', (e) => {
             e.preventDefault();
             const f = e.dataTransfer.files[0];
             if (f) insert(f, 0, true);
         });
     }
-    o.save?.addEventListener('click', () => {
+    if (o.save) on(o.save, 'click', () => {
         const disk = m.drives[0].disk;
         if (!disk) { say('drive 1 is empty'); return; }
         const { data: d, ext } = disk.toFile();   // MGT, or EDSK for a disk in its own format
@@ -200,9 +209,9 @@ export async function createSamApp(o) {
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     });
 
-    o.reset?.addEventListener('click', () => { m.reset(); draw(); o.onPauseChange?.(paused); canvas.focus(); });
-    o.pause?.addEventListener('click', () => setPaused(!paused));
-    o.sound?.addEventListener('click', () => setSound(!soundOn));
+    if (o.reset) on(o.reset, 'click', () => { m.reset(); draw(); o.onPauseChange?.(paused); canvas.focus(); });
+    if (o.pause) on(o.pause, 'click', () => setPaused(!paused));
+    if (o.sound) on(o.sound, 'click', () => setSound(!soundOn));
     canvas.focus();
     say('');
     // runFrames(n): n frames as the page would run them (for scripts and tests);
@@ -213,5 +222,13 @@ export async function createSamApp(o) {
         draw();
         return i;
     };
-    return { machine: m, setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames };
+    const destroy = () => {
+        stopped = true;
+        cancelAnimationFrame(raf);
+        offs.forEach(f => f());
+        if (document.pointerLockElement === canvas) document.exitPointerLock();
+        if (audio) audio.close().catch(() => {});
+    };
+    return { machine: m, setSound, pause: setPaused, isPaused: () => paused, draw, insert, boot, tickBoot, runFrames, destroy,
+             say, soundState: () => (audio ? audio.state : 'none') };
 }
